@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
+#include <utility>
 
 using namespace geode::prelude;
 using namespace cocos2d;
