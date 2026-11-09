@@ -1,0 +1,482 @@
+{
+    "geode": "5.11.2",
+    "gd": {
+        "win": "2.2081",
+        "mac": "2.2081",
+        "android": "2.2081",
+        "ios": "2.2081"
+    },
+    "id": "minlol12.na-frame-counter",
+    "name": "NA Frame Counter",
+    "version": "v1.0.0",
+    "developer": "MinLOL12",
+    "description": "Live NaN GD-inspired frame window counter measuring click and release survival windows at 240Hz, with outlined world markers, pitch-mapped ding audio, and live NaNDL precision.",
+    "tags": [
+        "gameplay",
+        "utility",
+        "interface",
+        "customization",
+        "cheat"
+    ],
+    "links": {
+        "source": "https://github.com/MinLOL12/NA-Frame-Counter",
+        "homepage": "https://nandl.pages.dev/"
+    },
+    "dependencies": {
+        "geode.node-ids": ">=v1.23.3"
+    },
+    "resources": {
+        "files": [
+            "resources/button.png",
+            "resources/glow.png",
+            "resources/sounds/ding_bell.wav",
+            "resources/sounds/ding_chime.wav",
+            "resources/sounds/ding_ping.wav",
+            "resources/sounds/ding_retro.wav"
+        ]
+    },
+    "settings": {
+        "open-mod-menu": {
+            "name": "Customize NA Frame Counter",
+            "description": "Open the interactive in-game customization menu with tabs for engine, circle visuals, ding pitch audio, and NaNDL precision.",
+            "type": "button",
+            "buttons": {
+                "open": "Open Menu"
+            }
+        },
+        "open-menu-keybind": {
+            "name": "Open Mod Menu Keybind",
+            "description": "Keybind to open or close the NA Frame Counter customization menu.",
+            "type": "keybind",
+            "category": "universal",
+            "default": {
+                "win": "F7",
+                "mac": "F7",
+                "android": [],
+                "ios": []
+            }
+        },
+        "title-general": {
+            "type": "title",
+            "name": "Measurement & Engine"
+        },
+        "enabled": {
+            "name": "Enable Mod",
+            "description": "Master switch for live frame window measuring, HUD overlays, markers, and audio.",
+            "type": "bool",
+            "default": true
+        },
+        "measure-clicks": {
+            "name": "Measure Click Windows",
+            "description": "Calculate live 240Hz survival windows for button presses (clicks).",
+            "type": "bool",
+            "default": true
+        },
+        "measure-releases": {
+            "name": "Measure Release Windows",
+            "description": "Calculate live 240Hz survival windows for button releases (Wave, Ship, Robot, and tight Cube releases).",
+            "type": "bool",
+            "default": true
+        },
+        "maximum-window-frames": {
+            "name": "Maximum Window (Frames)",
+            "description": "Maximum survival window width (in 240Hz frames) measured around each input.",
+            "type": "string",
+            "default": "12",
+            "one-of": [
+                "12",
+                "17",
+                "30",
+                "60",
+                "120",
+                "240"
+            ]
+        },
+        "ignore-harmless-clicks": {
+            "name": "Ignore Non-Fatal Clicks",
+            "description": "Skip clicks where removing the input does not change survival (e.g. harmless mid-air clicks).",
+            "type": "bool",
+            "default": true
+        },
+        "show-over-limit": {
+            "name": "Show Over-Limit Inputs",
+            "description": "Display a >Max badge when an input survives beyond the configured maximum window.",
+            "type": "bool",
+            "default": false
+        },
+        "title-visuals": {
+            "type": "title",
+            "name": "Visuals & Circle Markers"
+        },
+        "show-rings": {
+            "name": "Show Circle Markers",
+            "description": "Highlight click and release locations with an outlined circle and frame count number.",
+            "type": "bool",
+            "default": true
+        },
+        "label-placement": {
+            "name": "Frame Number Placement",
+            "description": "Where the frame count number (e.g. '1') appears relative to the outlined circle.",
+            "type": "string",
+            "default": "Left",
+            "one-of": [
+                "Left",
+                "Center",
+                "Top",
+                "Right"
+            ]
+        },
+        "color-preset": {
+            "name": "Color Palette",
+            "description": "Color progression for frame window tiers (1 frame tightest up to wide windows).",
+            "type": "string",
+            "default": "NaN GD Classic",
+            "one-of": [
+                "NaN GD Classic",
+                "NaN GD Fire",
+                "Pastel",
+                "Monochrome",
+                "Custom 1-5+"
+            ]
+        },
+        "color-1f": {
+            "name": "1-Frame Color (Custom)",
+            "description": "Custom RGB color for 1-frame perfects when Color Palette is set to 'Custom 1-5+'.",
+            "type": "rgb",
+            "default": "#FF0000"
+        },
+        "color-2f": {
+            "name": "2-Frame Color (Custom)",
+            "description": "Custom RGB color for 2-frame windows when Color Palette is set to 'Custom 1-5+'.",
+            "type": "rgb",
+            "default": "#FF7F00"
+        },
+        "color-3f": {
+            "name": "3-Frame Color (Custom)",
+            "description": "Custom RGB color for 3-frame windows when Color Palette is set to 'Custom 1-5+'.",
+            "type": "rgb",
+            "default": "#F6FF00"
+        },
+        "color-4f": {
+            "name": "4-Frame Color (Custom)",
+            "description": "Custom RGB color for 4-frame windows when Color Palette is set to 'Custom 1-5+'.",
+            "type": "rgb",
+            "default": "#FFFFFF"
+        },
+        "color-5p": {
+            "name": "5+ Frame Color (Custom)",
+            "description": "Custom RGB color for 5+ frame windows when Color Palette is set to 'Custom 1-5+'.",
+            "type": "rgb",
+            "default": "#00FF00"
+        },
+        "circle-radius": {
+            "name": "Circle Radius",
+            "description": "Radius (in screen points) of the click/release highlight circle.",
+            "type": "float",
+            "default": 10.0,
+            "min": 5.0,
+            "max": 26.0,
+            "control": {
+                "slider": true,
+                "slider-step": 0.5,
+                "arrows": true
+            }
+        },
+        "circle-thickness": {
+            "name": "Circle Thickness",
+            "description": "Stroke width of the colored circle ring.",
+            "type": "float",
+            "default": 2.0,
+            "min": 1.0,
+            "max": 5.0,
+            "control": {
+                "slider": true,
+                "slider-step": 0.25,
+                "arrows": true
+            }
+        },
+        "marker-scale": {
+            "name": "Marker & Text Scale",
+            "description": "Overall scale multiplier for circle markers and numbers.",
+            "type": "float",
+            "default": 1.0,
+            "min": 0.5,
+            "max": 2.0,
+            "control": {
+                "slider": true,
+                "slider-step": 0.05,
+                "arrows": true
+            }
+        },
+        "marker-fade-seconds": {
+            "name": "Marker Fade Duration (s)",
+            "description": "Seconds before markers fade out (0 = keep visible until death or restart).",
+            "type": "float",
+            "default": 0.0,
+            "min": 0.0,
+            "max": 6.0,
+            "control": {
+                "slider": true,
+                "slider-step": 0.25,
+                "arrows": true
+            }
+        },
+        "scale-with-zoom": {
+            "name": "Scale Markers With Zoom",
+            "description": "Scale world markers proportionally with level camera zoom.",
+            "type": "bool",
+            "default": false
+        },
+        "distinguish-release": {
+            "name": "Tag Release Markers (R)",
+            "description": "Prefix release window numbers with 'R' (e.g. R1) so release timings stand out from clicks.",
+            "type": "bool",
+            "default": true
+        },
+        "title-audio": {
+            "type": "title",
+            "name": "Audio & Pitch"
+        },
+        "ding-sounds": {
+            "name": "Enable Ding Sounds",
+            "description": "Play a pitch-mapped ding sound for measured frame windows (lower pitch for tighter windows, higher pitch for wider windows).",
+            "type": "bool",
+            "default": true
+        },
+        "sound-style": {
+            "name": "Ding Sound Style",
+            "description": "Select one of the built-in ding tones or use a custom audio file.",
+            "type": "string",
+            "default": "Classic Bell",
+            "one-of": [
+                "Classic Bell",
+                "Soft Chime",
+                "Crystal Ping",
+                "Retro Blip",
+                "Custom File"
+            ]
+        },
+        "custom-sound-file": {
+            "name": "Custom Sound File",
+            "description": "Custom .wav/.mp3/.ogg file used when Ding Sound Style is set to 'Custom File'.",
+            "type": "file",
+            "default": "",
+            "control": {
+                "dialog": "open",
+                "filters": [
+                    {
+                        "description": "Audio Files",
+                        "files": ["*.wav", "*.mp3", "*.ogg", "*.flac"]
+                    }
+                ]
+            }
+        },
+        "sound-volume": {
+            "name": "Ding Volume",
+            "description": "Volume of frame window ding sounds.",
+            "type": "float",
+            "default": 0.70,
+            "min": 0.0,
+            "max": 1.0,
+            "control": {
+                "slider": true,
+                "slider-step": 0.05,
+                "arrows": true
+            }
+        },
+        "sync-gd-sfx": {
+            "name": "Scale With GD SFX Volume",
+            "description": "Multiply ding volume by Geometry Dash's master SFX volume slider.",
+            "type": "bool",
+            "default": false
+        },
+        "min-pitch": {
+            "name": "Lowest Pitch (1 Frame)",
+            "description": "Pitch multiplier for 1-frame perfects (lower = deeper ding).",
+            "type": "float",
+            "default": 0.55,
+            "min": 0.25,
+            "max": 1.25,
+            "control": {
+                "slider": true,
+                "slider-step": 0.05,
+                "arrows": true
+            }
+        },
+        "max-pitch": {
+            "name": "Highest Pitch (Wide Window)",
+            "description": "Pitch multiplier at the upper end of the audio pitch scale (higher = brighter ding).",
+            "type": "float",
+            "default": 1.65,
+            "min": 0.80,
+            "max": 2.50,
+            "control": {
+                "slider": true,
+                "slider-step": 0.05,
+                "arrows": true
+            }
+        },
+        "pitch-curve": {
+            "name": "Pitch Mapping Curve",
+            "description": "How frame window size maps from Lowest Pitch (1F) to Highest Pitch.",
+            "type": "string",
+            "default": "Musical",
+            "one-of": [
+                "Musical",
+                "Linear",
+                "Semitones"
+            ]
+        },
+        "sound-max-frames": {
+            "name": "Audio Max Window Threshold",
+            "description": "Only play ding sounds for windows at or below this frame count.",
+            "type": "int",
+            "default": 12,
+            "min": 1,
+            "max": 240,
+            "control": {
+                "slider": true,
+                "slider-step": 1,
+                "arrows": true
+            }
+        },
+        "title-hud": {
+            "type": "title",
+            "name": "HUD & NaNDL Precision"
+        },
+        "show-counters": {
+            "name": "Show Frame Window Tally HUD",
+            "description": "Display live counts per frame window tier on screen.",
+            "type": "bool",
+            "default": true
+        },
+        "hud-corner": {
+            "name": "Tally HUD Corner",
+            "description": "Screen corner where the frame window tally list is anchored.",
+            "type": "string",
+            "default": "Top Left",
+            "one-of": [
+                "Top Left",
+                "Top Right",
+                "Bottom Right"
+            ]
+        },
+        "bucket-order": {
+            "name": "Tally Bucket Order",
+            "description": "Order of frame tiers in the tally list ('1 at Bottom' matches classic NaN GD).",
+            "type": "string",
+            "default": "1 at Bottom",
+            "one-of": [
+                "1 at Bottom",
+                "1 at Top"
+            ]
+        },
+        "show-last-badge": {
+            "name": "Show Last Input Indicator",
+            "description": "Show a compact readout of the most recent measured click or release window.",
+            "type": "bool",
+            "default": true
+        },
+        "show-precision-hud": {
+            "name": "Show Live NaNDL Precision (L*)",
+            "description": "Display live NaNDL sigma/s (L*) precision in the bottom-left corner.",
+            "type": "bool",
+            "default": true
+        },
+        "nandl-model": {
+            "name": "NaNDL Precision Model",
+            "description": "Which NaNDL difficulty weighting model(s) to display in the precision HUD.",
+            "type": "string",
+            "default": "NFC (Full)",
+            "one-of": [
+                "NFC (Full)",
+                "Base",
+                "Nerve",
+                "Fatigue",
+                "CPS",
+                "All Models"
+            ]
+        },
+        "show-pass-prob": {
+            "name": "Show Pass Probability P(C)",
+            "description": "Also show estimated clear probability at the solved L* inside the precision HUD.",
+            "type": "bool",
+            "default": false
+        },
+        "macro-fps": {
+            "name": "NaNDL Window FPS",
+            "description": "Denominator FPS used in NaNDL w_i = N_i / FPS (240.0 standard for GD 2.2).",
+            "type": "float",
+            "default": 240.0,
+            "min": 60.0,
+            "max": 960.0,
+            "control": {
+                "slider": false,
+                "arrows": true,
+                "arrow-step": 60.0
+            }
+        },
+        "respawn-time": {
+            "name": "NaNDL Respawn Time (s)",
+            "description": "Respawn delay added to every input timestamp t_i in NaNDL calculations.",
+            "type": "float",
+            "default": 0.0,
+            "min": 0.0,
+            "max": 5.0,
+            "control": {
+                "slider": true,
+                "slider-step": 0.1,
+                "arrows": true
+            }
+        },
+        "target-hours": {
+            "name": "NaNDL Target Clear Time (Hours)",
+            "description": "Expected clear time E[Tc] solved for L* (24.0 hours is the NaNDL standard).",
+            "type": "float",
+            "default": 24.0,
+            "min": 0.5,
+            "max": 168.0,
+            "control": {
+                "slider": false,
+                "arrows": true,
+                "arrow-step": 1.0
+            }
+        },
+        "nandl-kt": {
+            "name": "NaNDL Nerve Constant (k_t)",
+            "description": "Exponential nerve decay parameter k_t (default 0.0016520833717346).",
+            "type": "float",
+            "default": 0.0016520833717346,
+            "min": 0.0,
+            "max": 0.05,
+            "control": {
+                "slider": false,
+                "arrows": false
+            }
+        },
+        "nandl-ku": {
+            "name": "NaNDL Fatigue Constant (k_u)",
+            "description": "Exponential fatigue decay parameter k_u (default 0.0002727763242154).",
+            "type": "float",
+            "default": 0.0002727763242154,
+            "min": 0.0,
+            "max": 0.05,
+            "control": {
+                "slider": false,
+                "arrows": false
+            }
+        },
+        "nandl-kc": {
+            "name": "NaNDL CPS Constant (k_c)",
+            "description": "CPS penalty exponent k_c (default 0.2784421686721826).",
+            "type": "float",
+            "default": 0.2784421686721826,
+            "min": 0.0,
+            "max": 2.0,
+            "control": {
+                "slider": false,
+                "arrows": false
+            }
+        }
+    }
+}
