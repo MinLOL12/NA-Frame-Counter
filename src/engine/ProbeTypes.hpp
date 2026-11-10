@@ -23,10 +23,11 @@ static constexpr std::int64_t kReleaseDelay = 8;
 static constexpr std::int64_t kFlightMax = 120;
 static constexpr std::int64_t kGroundMax = 720;
 static constexpr std::int64_t kCubeLimit = 1440;
+static constexpr std::int64_t kLongHoldMeasureFrames = 720;
 static constexpr int kGroundSteps = 6;
 static constexpr int kProbeLimit = 720;
 static constexpr int kHoldLimit = 1440;
-static constexpr std::size_t kHistSize = 4096;
+static constexpr std::size_t kHistSize = 8192;
 static constexpr std::size_t kMaxVisibleMarkers = 160;
 static constexpr int kHoldSteps[] = {1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 160, 240};
 static constexpr int kHoldCount = static_cast<int>(sizeof(kHoldSteps) / sizeof(kHoldSteps[0]));
@@ -129,6 +130,15 @@ struct InputEvent {
     bool down = false;
     bool player2 = false;
     std::uint64_t order = 0;
+    bool holdOnly = false;
+    bool fromControl = false;
+};
+
+struct ControlEvent {
+    std::int64_t frame = 0;
+    bool player1 = true;
+    bool disabled = false;
+    std::uint64_t order = 0;
 };
 
 inline bool inputBefore(InputEvent const& a, InputEvent const& b) {
@@ -178,6 +188,11 @@ struct ClickJob {
     bool canScan = false;
     bool keepHold = true;
     bool ignoreHit = false;
+    bool fromControlEnable = false;
+    bool fromControlDisable = false;
+    bool synthesizedPreHold = false;
+    std::uint64_t pressControlOrder = kNoOrder;
+    std::uint64_t releaseControlOrder = kNoOrder;
 };
 
 struct HistorySlot {
@@ -194,6 +209,8 @@ struct HistorySlot {
     bool stateRingJump = false;
     bool stateRingJump2 = false;
     bool ringJumpRelated = false;
+    bool preInput = false;
+    bool controlsDisabled = false;
     bool valid = false;
 };
 

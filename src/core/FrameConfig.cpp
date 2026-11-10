@@ -8,7 +8,7 @@
 namespace na_frame_counter::core {
 
 int parseMaxWindowPreset(std::string_view value) {
-    constexpr std::array<int, 6> kPresets = {12, 17, 30, 60, 120, 240};
+    constexpr std::array<int, 7> kPresets = {10, 12, 17, 30, 60, 120, 240};
     for (int preset : kPresets) {
         if (value == std::to_string(preset)) return preset;
     }
@@ -55,7 +55,11 @@ NandlDisplayMode parseNandlDisplayMode(std::string_view value) {
     if (value == "Nerve") return NandlDisplayMode::Nerve;
     if (value == "Fatigue") return NandlDisplayMode::Fatigue;
     if (value == "CPS") return NandlDisplayMode::CPS;
-    if (value == "All Models") return NandlDisplayMode::AllModels;
+    if (value == "Nerve+Fatigue" || value == "N+F") return NandlDisplayMode::NerveFatigue;
+    if (value == "Nerve+CPS" || value == "N+C") return NandlDisplayMode::NerveCPS;
+    if (value == "Fatigue+CPS" || value == "F+C") return NandlDisplayMode::FatigueCPS;
+    if (value == "All 8 Models" || value == "All Models") return NandlDisplayMode::AllModels;
+    if (value == "Custom Toggles" || value == "Custom") return NandlDisplayMode::Custom;
     return NandlDisplayMode::NFC;
 }
 
@@ -73,7 +77,17 @@ char const* soundAssetFilename(SoundStyle style) {
 
 std::vector<WindowBand> bandsForMax(int maxFrames, bool oneAtBottom) {
     std::vector<WindowBand> bands;
-    if (maxFrames <= 12) {
+    if (maxFrames <= 10) {
+        bands = {
+            {9, 10, "9-10"},
+            {7, 8, "7-8"},
+            {5, 6, "5-6"},
+            {4, 4, "4"},
+            {3, 3, "3"},
+            {2, 2, "2"},
+            {1, 1, "1"},
+        };
+    } else if (maxFrames <= 12) {
         bands = {
             {9, 12, "9-12"},
             {7, 8, "7-8"},

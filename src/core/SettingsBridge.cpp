@@ -49,10 +49,19 @@ constexpr std::array<std::string_view, 33> kAllKeys = {{
     "show-last-badge",
 }};
 
-constexpr std::array<std::string_view, 9> kNandlKeys = {{
+constexpr std::array<std::string_view, 18> kNandlKeys = {{
     "show-precision-hud",
     "nandl-model",
+    "nandl-show-base",
+    "nandl-show-nerve",
+    "nandl-show-fatigue",
+    "nandl-show-cps",
+    "nandl-show-nf",
+    "nandl-show-nc",
+    "nandl-show-fc",
+    "nandl-show-nfc",
     "show-pass-prob",
+    "show-expected-time",
     "macro-fps",
     "respawn-time",
     "target-hours",
@@ -107,7 +116,16 @@ ModSettingsSnapshot SettingsBridge::read() {
     s.showLastBadge = mod->getSettingValue<bool>("show-last-badge");
     s.showPrecisionHud = mod->getSettingValue<bool>("show-precision-hud");
     s.nandlDisplay = parseNandlDisplayMode(mod->getSettingValue<std::string>("nandl-model"));
+    s.nandlCustom.base = mod->getSettingValue<bool>("nandl-show-base");
+    s.nandlCustom.nerve = mod->getSettingValue<bool>("nandl-show-nerve");
+    s.nandlCustom.fatigue = mod->getSettingValue<bool>("nandl-show-fatigue");
+    s.nandlCustom.cps = mod->getSettingValue<bool>("nandl-show-cps");
+    s.nandlCustom.nerveFatigue = mod->getSettingValue<bool>("nandl-show-nf");
+    s.nandlCustom.nerveCps = mod->getSettingValue<bool>("nandl-show-nc");
+    s.nandlCustom.fatigueCps = mod->getSettingValue<bool>("nandl-show-fc");
+    s.nandlCustom.nfc = mod->getSettingValue<bool>("nandl-show-nfc");
     s.showPassProb = mod->getSettingValue<bool>("show-pass-prob");
+    s.showExpectedTime = mod->getSettingValue<bool>("show-expected-time");
 
     s.nandlParams.macroFps = std::clamp(mod->getSettingValue<double>("macro-fps"), 60.0, 960.0);
     s.nandlParams.respawnTime = std::clamp(mod->getSettingValue<double>("respawn-time"), 0.0, 5.0);

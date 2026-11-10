@@ -52,6 +52,18 @@ void ProbeController::onSettingsChanged() {
             clearPrecisionHUD();
             clearMarkers();
         } else {
+            if (!m_nandlInputs.empty()) {
+                m_nandlSummary = math::NandlCalculator::solveAll(
+                    m_nandlInputs,
+                    m_cfg.nandlParams,
+                    m_hasNandlSummary ? &m_nandlSummary : nullptr
+                );
+                m_hasNandlSummary = true;
+                m_stats.currentLStar = m_nandlSummary.nfc.lStar;
+                if (m_stats.currentLStar > m_stats.bestLStar) {
+                    m_stats.bestLStar = m_stats.currentLStar;
+                }
+            }
             buildHUD();
             buildPrecisionHUD();
         }
@@ -121,12 +133,17 @@ void ProbeController::onSentinelDestroyed(SentinelKind kind, void* expected) {
                 m_attemptDone = false;
                 m_sendingJump = false;
                 m_jumpP1 = true;
+                m_pendingButtonLocked = false;
+                m_inControlEnablePlayer = nullptr;
+                m_inControlDisablePlayer = nullptr;
+                m_activeControlOrder = kNoOrder;
                 m_lastFrame = 0;
                 m_attemptStartFrame = 0;
                 m_orderCounter = 1;
                 m_jumpCount = 0;
 
                 m_events.clear();
+                m_controlEvents.clear();
                 m_clicks.clear();
                 m_jumps.clear();
                 m_measuredWindows.clear();
@@ -170,12 +187,17 @@ void ProbeController::resetAttemptState() {
     m_attemptDone = false;
     m_sendingJump = false;
     m_jumpP1 = true;
+    m_pendingButtonLocked = false;
+    m_inControlEnablePlayer = nullptr;
+    m_inControlDisablePlayer = nullptr;
+    m_activeControlOrder = kNoOrder;
     m_lastFrame = 0;
     m_attemptStartFrame = 0;
     m_orderCounter = 1;
     m_jumpCount = 0;
 
     m_events.clear();
+    m_controlEvents.clear();
     m_clicks.clear();
     m_jumps.clear();
     m_measuredWindows.clear();
@@ -243,6 +265,10 @@ void ProbeController::beforeReset(PlayLayer* layer) {
     m_ring = nullptr;
     m_jumps.clear();
     m_sendingJump = false;
+    m_pendingButtonLocked = false;
+    m_inControlEnablePlayer = nullptr;
+    m_inControlDisablePlayer = nullptr;
+    m_activeControlOrder = kNoOrder;
     dropProbe();
 }
 
@@ -274,6 +300,18 @@ void ProbeController::handleDeath(PlayLayer* layer) {
 
 void ProbeController::completeLevel(PlayLayer* layer) {
     if (!layer || layer != m_level || m_levelDone) return;
+
+    if (!m_platformer && m_cfg.enabled && m_started && !m_attemptDone && m_probeLayer) {
+        for (auto& job : m_clicks) {
+            if (!job.canScan || !job.activated) continue;
+            if (!job.pressDone && job.releaseFrame < 0) {
+                job.keepHold = false;
+                job.tryHolding = false;
+            }
+            scanClick(layer, job);
+        }
+    }
+
     m_levelDone = true;
     m_attemptDone = true;
     m_probing = false;
@@ -283,9 +321,80 @@ void ProbeController::completeLevel(PlayLayer* layer) {
     m_ring = nullptr;
     m_jumps.clear();
     m_sendingJump = false;
+    m_pendingButtonLocked = false;
+    m_inControlEnablePlayer = nullptr;
+    m_inControlDisablePlayer = nullptr;
+    m_activeControlOrder = kNoOrder;
     m_clockReady = false;
     m_started = false;
     dropProbe();
+}
+
+void ProbeController::ensureStarted(PlayLayer* layer) {
+    if (!layer || m_started) return;
+    m_started = true;
+    startClock(layer);
+    setupProbe(layer);
+}
+
+void ProbeController::synthesizePreStartHold(PlayLayer* layer, PlayerObject* player, bool isPlayer1) {
+    if (!layer || !player || !m_started) return;
+    const int idx = isPlayer1 ? 0 : 1;
+    auto& pre = m_preStartSlot[idx];
+    if (pre.valid) {
+        pre.held[static_cast<int>(PlayerButton::Jump)] = false;
+        pre.stateRingJump = false;
+        if (pre.state) {
+            pre.state->m_jumpBuffered = false;
+            pre.state->m_wasJumpBuffered = false;
+        }
+    }
+
+    const auto atFrame = m_attemptStartFrame;
+    InputEvent event;
+    event.frame = atFrame;
+    event.button = PlayerButton::Jump;
+    event.down = true;
+    event.player2 = !isPlayer1;
+    event.order = m_orderCounter++;
+    m_events.push_back(event);
+
+    ClickJob job;
+    job.pressFrame = atFrame;
+    job.pressOrder = event.order;
+    job.button = static_cast<int>(PlayerButton::Jump);
+    job.player1 = isPlayer1;
+    job.canScan = true;
+    job.pressPos = player->getPosition();
+    job.keepHold = true;
+    job.synthesizedPreHold = true;
+    job.ignoreHit = player->m_isShip || player->m_isDart;
+    if (isFlight(player) || isUfo(player) || player->m_jumpBuffered || player->m_isDashing) {
+        confirmJump(job, atFrame, player->getPosition(), false, false, nullptr, false);
+    }
+    m_clicks.push_back(job);
+}
+
+void ProbeController::beforeUpdate(GJBaseGameLayer* base) {
+    if (!base || m_probing || !m_level) return;
+    if (static_cast<GJBaseGameLayer*>(m_level) != base) return;
+    if (!m_cfg.enabled || m_platformer || m_resetting || m_attemptDone || m_levelDone) return;
+
+    if (!m_started && m_level->m_player1 && m_level->isGameplayActive()) {
+        ensureStarted(m_level);
+
+        auto checkPreHold = [&](PlayerObject* player, bool isPlayer1) {
+            if (!player || player->m_controlsDisabled || player->m_isLocked) return;
+            auto it = player->m_holdingButtons.find(static_cast<int>(PlayerButton::Jump));
+            if (it != player->m_holdingButtons.end() && it->second) {
+                synthesizePreStartHold(m_level, player, isPlayer1);
+            }
+        };
+        checkPreHold(m_level->m_player1, true);
+        if (m_level->m_gameState.m_isDualMode && m_level->m_player2) {
+            checkPreHold(m_level->m_player2, false);
+        }
+    }
 }
 
 void ProbeController::afterTick(PlayLayer* layer, float dt) {
@@ -300,8 +409,7 @@ void ProbeController::afterTick(PlayLayer* layer, float dt) {
     if (m_levelDone || m_platformer || !m_cfg.enabled) return;
 
     if (!m_started && layer->m_player1 && layer->isGameplayActive()) {
-        m_started = true;
-        startClock(layer);
+        ensureStarted(layer);
     }
 
     if (m_started && !m_attemptDone && !m_probeLayer) {
@@ -313,6 +421,24 @@ void ProbeController::afterUpdate(GJBaseGameLayer* base) {
     if (!base || m_probing || !m_level) return;
     if (static_cast<GJBaseGameLayer*>(m_level) != base) return;
     if (!m_cfg.enabled || m_platformer || m_resetting || !m_started || m_attemptDone || m_levelDone) return;
+
+    // Fallback: if a pre-start hold existed without triggering pushButton on the first frame
+    if (rawFrame(m_level) == m_attemptStartFrame) {
+        auto checkOpenHold = [&](PlayerObject* player, bool isPlayer1) {
+            if (!player || player->m_controlsDisabled || player->m_isLocked) return;
+            auto itHold = player->m_holdingButtons.find(static_cast<int>(PlayerButton::Jump));
+            if (itHold == player->m_holdingButtons.end() || !itHold->second) return;
+            for (auto const& c : m_clicks) {
+                if (c.player1 == isPlayer1 && c.releaseFrame < 0) return;
+            }
+            synthesizePreStartHold(m_level, player, isPlayer1);
+        };
+        checkOpenHold(m_level->m_player1, true);
+        if (m_level->m_gameState.m_isDualMode && m_level->m_player2) {
+            checkOpenHold(m_level->m_player2, false);
+        }
+    }
+
     scanClicks(m_level);
 }
 
@@ -341,12 +467,52 @@ void ProbeController::pauseEnd(PlayLayer* layer) {
     }
 }
 
+void ProbeController::beforeControlToggle(PlayerObject* player, bool enable) {
+    if (!player || !m_level || m_replayingInput || m_probing || m_platformer || !m_cfg.enabled) return;
+    if (m_attemptDone || !m_started) return;
+
+    bool isPlayer1 = false;
+    if (player == m_level->m_player1) isPlayer1 = true;
+    else if (player == m_level->m_player2) isPlayer1 = false;
+    else return;
+
+    const auto atFrame = m_clockReady ? rawFrame(m_level) : m_lastFrame;
+    const auto order = m_orderCounter++;
+
+    ControlEvent ce;
+    ce.frame = atFrame;
+    ce.player1 = isPlayer1;
+    ce.disabled = !enable;
+    ce.order = order;
+    m_controlEvents.push_back(ce);
+
+    m_activeControlOrder = order;
+    if (enable) {
+        m_inControlEnablePlayer = player;
+    } else {
+        m_inControlDisablePlayer = player;
+    }
+}
+
+void ProbeController::afterControlToggle(PlayerObject* player, bool enable) {
+    if (enable && m_inControlEnablePlayer == player) {
+        m_inControlEnablePlayer = nullptr;
+    }
+    if (!enable && m_inControlDisablePlayer == player) {
+        m_inControlDisablePlayer = nullptr;
+    }
+    m_activeControlOrder = kNoOrder;
+}
+
 bool ProbeController::beforeButton(PlayerObject* player, PlayerButton button, bool down) {
+    m_pendingButtonLocked = false;
     if (!player || !m_level || m_replayingInput || m_platformer || !m_cfg.enabled) return true;
     if (player != m_level->m_player1 && player != m_level->m_player2) return true;
     if (m_attemptDone || !m_started) return true;
 
-    if (down && button == PlayerButton::Jump) {
+    m_pendingButtonLocked = (player->m_isLocked || player->m_controlsDisabled);
+
+    if (down && button == PlayerButton::Jump && !m_pendingButtonLocked) {
         m_sendingJump = true;
         m_jumpP1 = (player == m_level->m_player1);
     }
@@ -355,6 +521,8 @@ bool ProbeController::beforeButton(PlayerObject* player, PlayerButton button, bo
 
 void ProbeController::afterButton(PlayerObject* player, PlayerButton button, bool down, bool accepted) {
     m_sendingJump = false;
+    const bool lockedBeforeCall = m_pendingButtonLocked;
+    m_pendingButtonLocked = false;
 
     if (!player || !m_level || m_replayingInput || m_platformer || !m_cfg.enabled) return;
     if (m_attemptDone || !m_started) return;
@@ -368,7 +536,29 @@ void ProbeController::afterButton(PlayerObject* player, PlayerButton button, boo
         return;
     }
 
+    const bool fromEnable = down && (m_inControlEnablePlayer == player);
+    const bool fromDisable = !down && (m_inControlDisablePlayer == player);
+
+    // Ignore non-jump synthetic releaseButton(2/3/5) calls inside disablePlayerControls() in classic mode
+    if (fromDisable && button != PlayerButton::Jump && !m_platformer) {
+        return;
+    }
+
     const auto atFrame = m_clockReady ? rawFrame(m_level) : m_lastFrame;
+
+    // Physical button presses/releases while m_controlsDisabled/m_isLocked do not jump or release active holds,
+    // but we record holdOnly so probe->m_holdingButtons stays in sync if replayed across an enablePlayerControls().
+    if (lockedBeforeCall && !fromEnable && !fromDisable) {
+        InputEvent event;
+        event.frame = atFrame;
+        event.button = button;
+        event.down = down;
+        event.player2 = !isPlayer1;
+        event.order = m_orderCounter++;
+        event.holdOnly = true;
+        m_events.push_back(event);
+        return;
+    }
 
     InputEvent event;
     event.frame = atFrame;
@@ -376,9 +566,32 @@ void ProbeController::afterButton(PlayerObject* player, PlayerButton button, boo
     event.down = down;
     event.player2 = !isPlayer1;
     event.order = m_orderCounter++;
+    event.fromControl = fromEnable || fromDisable;
     m_events.push_back(event);
 
     if (button == PlayerButton::Jump && down) {
+        // If synthesizePreStartHold already opened a frame-0 hold and GD also called pushButton on frame 0,
+        // adopt the existing job cleanly rather than duplicating it.
+        if (atFrame == m_attemptStartFrame) {
+            for (auto it = m_clicks.rbegin(); it != m_clicks.rend(); ++it) {
+                if (it->player1 == isPlayer1 && it->synthesizedPreHold &&
+                    it->pressFrame == atFrame && it->releaseFrame < 0) {
+                    it->pressOrder = event.order;
+                    it->fromControlEnable = it->fromControlEnable || fromEnable;
+                    if (fromEnable && m_activeControlOrder != kNoOrder) {
+                        it->pressControlOrder = m_activeControlOrder;
+                    }
+                    it->synthesizedPreHold = false;
+                    applyJump(*it);
+                    if (!it->activated && (accepted || !lockedBeforeCall) &&
+                        (isFlight(player) || isUfo(player))) {
+                        confirmJump(*it, atFrame, player->getPosition(), false, false, nullptr, false);
+                    }
+                    return;
+                }
+            }
+        }
+
         ClickJob job;
         job.pressFrame = atFrame;
         job.pressOrder = event.order;
@@ -388,9 +601,12 @@ void ProbeController::afterButton(PlayerObject* player, PlayerButton button, boo
         job.pressPos = player->getPosition();
         job.keepHold = true;
         job.ignoreHit = player->m_isShip || player->m_isDart;
+        job.fromControlEnable = fromEnable;
+        job.pressControlOrder = fromEnable ? m_activeControlOrder : kNoOrder;
         applyJump(job);
 
-        if (!job.activated && accepted && (isFlight(player) || isUfo(player))) {
+        if (!job.activated && (accepted || !lockedBeforeCall) &&
+            (isFlight(player) || isUfo(player) || player->m_isDashing)) {
             confirmJump(job, atFrame, player->getPosition(), false, false, nullptr, false);
         }
 
@@ -403,6 +619,8 @@ void ProbeController::afterButton(PlayerObject* player, PlayerButton button, boo
             it->releaseOrder = event.order;
             it->releasePos = player->getPosition();
             it->ignoreHit = it->ignoreHit || player->m_isShip || player->m_isDart;
+            it->fromControlDisable = fromDisable;
+            it->releaseControlOrder = fromDisable ? m_activeControlOrder : kNoOrder;
             break;
         }
     }
@@ -435,7 +653,7 @@ void ProbeController::confirmJump(
     job.fromRing = fromRing;
     job.wasBuffered = wasBuffered || activationFrame > job.pressFrame;
     job.activationRing = ring;
-    job.tryHolding = tryHolding;
+    job.tryHolding = tryHolding && !job.fromControlEnable && !job.fromControlDisable;
     job.clickIndex = ++m_jumpCount;
 }
 

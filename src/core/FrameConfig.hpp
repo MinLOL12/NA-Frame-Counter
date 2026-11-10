@@ -63,7 +63,22 @@ enum class NandlDisplayMode : int {
     Nerve = 2,
     Fatigue = 3,
     CPS = 4,
-    AllModels = 5,
+    NerveFatigue = 5,
+    NerveCPS = 6,
+    FatigueCPS = 7,
+    AllModels = 8,
+    Custom = 9,
+};
+
+struct NandlVisibility {
+    bool base = false;
+    bool nerve = false;
+    bool fatigue = false;
+    bool cps = false;
+    bool nerveFatigue = false;
+    bool nerveCps = false;
+    bool fatigueCps = false;
+    bool nfc = true;
 };
 
 struct ModSettingsSnapshot {
@@ -109,7 +124,9 @@ struct ModSettingsSnapshot {
     bool showLastBadge = true;
     bool showPrecisionHud = true;
     NandlDisplayMode nandlDisplay = NandlDisplayMode::NFC;
+    NandlVisibility nandlCustom;
     bool showPassProb = false;
+    bool showExpectedTime = false;
     math::NandlParams nandlParams;
 };
 

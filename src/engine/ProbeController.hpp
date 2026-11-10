@@ -45,6 +45,7 @@ public:
     void onReset(PlayLayer* layer);
     void handleDeath(PlayLayer* layer);
     void completeLevel(PlayLayer* layer);
+    void beforeUpdate(GJBaseGameLayer* base);
     void afterTick(PlayLayer* layer, float dt);
     void afterUpdate(GJBaseGameLayer* base);
     void onQuit(PlayLayer* layer);
@@ -55,6 +56,8 @@ public:
     // Input & Activation Recording
     bool beforeButton(PlayerObject* player, PlayerButton button, bool down);
     void afterButton(PlayerObject* player, PlayerButton button, bool down, bool accepted);
+    void beforeControlToggle(PlayerObject* player, bool enable);
+    void afterControlToggle(PlayerObject* player, bool enable);
     void onJumpActive(PlayerObject* player, RingObject* ring);
     void saveHistory(PlayLayer* layer, PlayerObject* player);
 
@@ -113,9 +116,12 @@ private:
     void setupProbe(PlayLayer* layer);
     void dropProbe();
     void clearHistory();
-    HistorySlot const* findHistory(bool player1, std::int64_t desiredFrame) const;
+    void ensureStarted(PlayLayer* layer);
+    void synthesizePreStartHold(PlayLayer* layer, PlayerObject* player, bool isPlayer1);
+    void captureSlot(PlayLayer* layer, PlayerObject* player, HistorySlot& slot, std::int64_t frame, bool preInput);
+    HistorySlot const* findHistory(bool player1, std::int64_t desiredFrame, bool needPreInput = false) const;
     bool probeReady(PlayerObject* player) const;
-    void probeInput(PlayerObject* probe, InputEvent const& event, bool pressEvent);
+    void probeInput(PlayerObject* probe, InputEvent const& event, bool pressEvent, bool forceEnableControls, bool forceDisableAfter);
     PathState runPath(
         PlayLayer* layer,
         ClickJob const& job,
@@ -168,7 +174,7 @@ private:
     void buildPrecisionHUD();
     void clearPrecisionHUD();
     void updatePrecisionHUD();
-    void recordNandlAndUpdate(std::int64_t actionFrame, std::uint64_t windowFrames, bool isRelease);
+    void recordNandlAndUpdate(std::int64_t actionFrame, std::uint64_t windowFrames, bool isRelease, bool ignored = false);
 
     cocos2d::CCPoint ringScreenPos(PlayLayer* layer, cocos2d::CCPoint objectPos) const;
     cocos2d::CCNode* createRingMarkerNode(
@@ -195,8 +201,10 @@ private:
         std::uint64_t releaseWindow,
         bool showPress,
         bool pressOver,
+        bool pressNandlIgnored,
         bool showRelease,
-        bool releaseOver
+        bool releaseOver,
+        bool releaseNandlIgnored
     );
 
     // State
@@ -220,9 +228,15 @@ private:
 
     bool m_sendingJump = false;
     bool m_jumpP1 = true;
+    bool m_pendingButtonLocked = false;
+    PlayerObject* m_inControlEnablePlayer = nullptr;
+    PlayerObject* m_inControlDisablePlayer = nullptr;
+    std::uint64_t m_activeControlOrder = kNoOrder;
 
     std::vector<InputEvent> m_events;
     std::vector<InputEvent> m_probeEvents;
+    std::vector<ControlEvent> m_controlEvents;
+    std::vector<ControlEvent> m_probeControlEvents;
     std::vector<ClickJob> m_clicks;
     std::deque<JumpEvent> m_jumps;
 
@@ -237,6 +251,7 @@ private:
     GJGroundLayer* m_ground2 = nullptr;
 
     std::array<std::array<HistorySlot, kHistSize>, 2> m_history{};
+    std::array<HistorySlot, 2> m_preStartSlot{};
     std::array<std::int64_t, 2> m_lastHistFrame{-1, -1};
 
     bool m_probing = false;

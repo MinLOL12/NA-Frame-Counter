@@ -584,7 +584,7 @@ void ModMenuPopup::rebuildCurrentTab() {
             addToggleRow(rows, kListW, "Measure Release Windows", "measure-releases", cfg.measureReleases);
             addCycleRow(
                 rows, kListW, "Maximum Window (Frames)",
-                {"12", "17", "30", "60", "120", "240"},
+                {"10", "12", "17", "30", "60", "120", "240"},
                 mod ? mod->getSettingValue<std::string>("maximum-window-frames") : "12",
                 "maximum-window-frames"
             );
@@ -767,11 +767,33 @@ void ModMenuPopup::rebuildCurrentTab() {
             addToggleRow(rows, kListW, "Show Precision L* HUD", "show-precision-hud", cfg.showPrecisionHud);
             addCycleRow(
                 rows, kListW, "NaNDL Model",
-                {"NFC (Full)", "Base", "Nerve", "Fatigue", "CPS", "All Models"},
+                {
+                    "NFC (Full)", "Base", "Nerve", "Fatigue", "CPS",
+                    "Nerve+Fatigue", "Nerve+CPS", "Fatigue+CPS",
+                    "All 8 Models", "Custom Toggles"
+                },
                 mod ? mod->getSettingValue<std::string>("nandl-model") : "NFC (Full)",
-                "nandl-model"
+                "nandl-model",
+                [weakSelf](std::string const&) {
+                    Loader::get()->queueInMainThread([weakSelf]() {
+                        if (auto self = weakSelf.lock(); self && !self->m_closed) {
+                            self->rebuildCurrentTab();
+                        }
+                    });
+                }
             );
+            if (cfg.nandlDisplay == core::NandlDisplayMode::Custom) {
+                addToggleRow(rows, kListW, "Custom: Base L*", "nandl-show-base", cfg.nandlCustom.base);
+                addToggleRow(rows, kListW, "Custom: Nerve L*", "nandl-show-nerve", cfg.nandlCustom.nerve);
+                addToggleRow(rows, kListW, "Custom: Fatigue L*", "nandl-show-fatigue", cfg.nandlCustom.fatigue);
+                addToggleRow(rows, kListW, "Custom: CPS L*", "nandl-show-cps", cfg.nandlCustom.cps);
+                addToggleRow(rows, kListW, "Custom: Nerve+Fatigue L*", "nandl-show-nf", cfg.nandlCustom.nerveFatigue);
+                addToggleRow(rows, kListW, "Custom: Nerve+CPS L*", "nandl-show-nc", cfg.nandlCustom.nerveCps);
+                addToggleRow(rows, kListW, "Custom: Fatigue+CPS L*", "nandl-show-fc", cfg.nandlCustom.fatigueCps);
+                addToggleRow(rows, kListW, "Custom: NFC (Full) L*", "nandl-show-nfc", cfg.nandlCustom.nfc);
+            }
             addToggleRow(rows, kListW, "Show Pass Chance P(C)", "show-pass-prob", cfg.showPassProb);
+            addToggleRow(rows, kListW, "Show Attempt Time E[Ta]", "show-expected-time", cfg.showExpectedTime);
             addNumberInputRow(rows, kListW, "Window FPS", "macro-fps", cfg.nandlParams.macroFps, 60.0, 960.0, 1);
             addNumberInputRow(rows, kListW, "Respawn Time (s)", "respawn-time", cfg.nandlParams.respawnTime, 0.0, 5.0, 2);
             addNumberInputRow(rows, kListW, "Target Clear Time (h)", "target-hours", cfg.nandlParams.targetTime / 3600.0, 0.5, 168.0, 1);

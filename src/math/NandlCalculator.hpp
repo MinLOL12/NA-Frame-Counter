@@ -19,6 +19,7 @@ struct InputTiming {
     double windowFrames = 1.0;
     int swiftCount = 1;
     bool isRelease = false;
+    bool ignored = false; // NaNDL '-' ignored-window semantics (preserves timing/CPS, skipped unless CPS active)
 };
 
 enum class NandlModel : int {
@@ -76,6 +77,8 @@ public:
         NandlParams const& params,
         NandlSummary const* hint = nullptr
     );
+
+    static NandlMetrics const& modelMetrics(NandlSummary const& summary, NandlModel model);
 };
 
 }

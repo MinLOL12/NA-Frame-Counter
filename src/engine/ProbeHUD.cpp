@@ -44,6 +44,49 @@ std::string formatProb(double p) {
     return fmt::format("{:.2e}%", pct);
 }
 
+std::string formatDuration(double seconds) {
+    if (!std::isfinite(seconds) || seconds < 0.0) return "0.00s";
+    if (seconds < 60.0) return fmt::format("{:.2f}s", seconds);
+    if (seconds < 3600.0) {
+        const int mins = static_cast<int>(seconds / 60.0);
+        const double rem = seconds - mins * 60.0;
+        return fmt::format("{}m{:.1f}s", mins, rem);
+    }
+    const double hrs = seconds / 3600.0;
+    return fmt::format("{:.2f}h", hrs);
+}
+
+bool wantsModel(core::ModSettingsSnapshot const& cfg, math::NandlModel model) {
+    using D = core::NandlDisplayMode;
+    using M = math::NandlModel;
+    if (model == M::NFC) return true; // Always compute NFC for SessionStats.currentLStar / bestLStar
+    switch (cfg.nandlDisplay) {
+        case D::Base: return model == M::Base;
+        case D::Nerve: return model == M::Nerve;
+        case D::Fatigue: return model == M::Fatigue;
+        case D::CPS: return model == M::CPS;
+        case D::NerveFatigue: return model == M::NerveFatigue;
+        case D::NerveCPS: return model == M::NerveCPS;
+        case D::FatigueCPS: return model == M::FatigueCPS;
+        case D::AllModels: return true;
+        case D::Custom:
+            switch (model) {
+                case M::Base: return cfg.nandlCustom.base;
+                case M::Nerve: return cfg.nandlCustom.nerve;
+                case M::Fatigue: return cfg.nandlCustom.fatigue;
+                case M::CPS: return cfg.nandlCustom.cps;
+                case M::NerveFatigue: return cfg.nandlCustom.nerveFatigue;
+                case M::NerveCPS: return cfg.nandlCustom.nerveCps;
+                case M::FatigueCPS: return cfg.nandlCustom.fatigueCps;
+                case M::NFC: return true;
+            }
+            return false;
+        case D::NFC:
+        default:
+            return false;
+    }
+}
+
 } // namespace
 
 void ProbeController::clearHUD() {
@@ -337,10 +380,18 @@ void ProbeController::updatePrecisionHUD() {
     }
 
     auto formatLine = [&](char const* name, math::NandlMetrics const& m) {
+        std::string out = fmt::format("{}: {:.2f} s/s", name, m.lStar);
         if (m_cfg.showPassProb) {
-            return fmt::format("{}: {:.2f} s/s  (P {})", name, m.lStar, formatProb(m.passProbability));
+            out += fmt::format("  (P {})", formatProb(m.passProbability));
         }
-        return fmt::format("{}: {:.2f} s/s", name, m.lStar);
+        if (m_cfg.showExpectedTime) {
+            out += fmt::format("  (Ta {})", formatDuration(m.expectedAttemptTime));
+        }
+        return out;
+    };
+
+    auto showIf = [&](bool cond, char const* name, math::NandlMetrics const& m, ccColor3B col) {
+        if (cond) addLine(formatLine(name, m), col);
     };
 
     switch (m_cfg.nandlDisplay) {
@@ -356,12 +407,37 @@ void ProbeController::updatePrecisionHUD() {
         case core::NandlDisplayMode::CPS:
             addLine(formatLine("CPS L*", m_nandlSummary.cps), {160, 255, 160});
             break;
+        case core::NandlDisplayMode::NerveFatigue:
+            addLine(formatLine("N+F L*", m_nandlSummary.nerveFatigue), {255, 225, 175});
+            break;
+        case core::NandlDisplayMode::NerveCPS:
+            addLine(formatLine("N+C L*", m_nandlSummary.nerveCps), {210, 255, 140});
+            break;
+        case core::NandlDisplayMode::FatigueCPS:
+            addLine(formatLine("F+C L*", m_nandlSummary.fatigueCps), {145, 255, 220});
+            break;
         case core::NandlDisplayMode::AllModels:
             addLine(formatLine("NFC L*", m_nandlSummary.nfc), {255, 130, 130});
+            addLine(formatLine("F+C L*", m_nandlSummary.fatigueCps), {145, 255, 220});
+            addLine(formatLine("N+C L*", m_nandlSummary.nerveCps), {210, 255, 140});
+            addLine(formatLine("N+F L*", m_nandlSummary.nerveFatigue), {255, 225, 175});
             addLine(formatLine("CPS L*", m_nandlSummary.cps), {160, 255, 160});
             addLine(formatLine("Fatigue L*", m_nandlSummary.fatigue), {150, 230, 255});
             addLine(formatLine("Nerve L*", m_nandlSummary.nerve), {255, 210, 120});
             addLine(formatLine("Base L*", m_nandlSummary.base), {255, 255, 255});
+            break;
+        case core::NandlDisplayMode::Custom:
+            showIf(m_cfg.nandlCustom.nfc, "NFC L*", m_nandlSummary.nfc, {255, 130, 130});
+            showIf(m_cfg.nandlCustom.fatigueCps, "F+C L*", m_nandlSummary.fatigueCps, {145, 255, 220});
+            showIf(m_cfg.nandlCustom.nerveCps, "N+C L*", m_nandlSummary.nerveCps, {210, 255, 140});
+            showIf(m_cfg.nandlCustom.nerveFatigue, "N+F L*", m_nandlSummary.nerveFatigue, {255, 225, 175});
+            showIf(m_cfg.nandlCustom.cps, "CPS L*", m_nandlSummary.cps, {160, 255, 160});
+            showIf(m_cfg.nandlCustom.fatigue, "Fatigue L*", m_nandlSummary.fatigue, {150, 230, 255});
+            showIf(m_cfg.nandlCustom.nerve, "Nerve L*", m_nandlSummary.nerve, {255, 210, 120});
+            showIf(m_cfg.nandlCustom.base, "Base L*", m_nandlSummary.base, {255, 255, 255});
+            if (y == 0.f) {
+                addLine(formatLine("NFC L*", m_nandlSummary.nfc), {255, 255, 255});
+            }
             break;
         case core::NandlDisplayMode::NFC:
         default:
@@ -373,22 +449,42 @@ void ProbeController::updatePrecisionHUD() {
 void ProbeController::recordNandlAndUpdate(
     std::int64_t actionFrame,
     std::uint64_t windowFrames,
-    bool isRelease
+    bool isRelease,
+    bool ignored
 ) {
-    if (windowFrames == 0) return;
+    if (!ignored && windowFrames == 0) return;
 
     math::InputTiming timing;
     timing.frame = static_cast<double>(std::max<std::int64_t>(0, actionFrame));
-    timing.windowFrames = static_cast<double>(windowFrames);
+    timing.windowFrames = ignored ? 0.0 : static_cast<double>(windowFrames);
     timing.swiftCount = 1;
     timing.isRelease = isRelease;
+    timing.ignored = ignored;
     m_nandlInputs.push_back(timing);
 
-    m_nandlSummary = math::NandlCalculator::solveAll(
-        m_nandlInputs,
-        m_cfg.nandlParams,
-        m_hasNandlSummary ? &m_nandlSummary : nullptr
-    );
+    const auto* hint = m_hasNandlSummary ? &m_nandlSummary : nullptr;
+    auto solveIf = [&](math::NandlModel model, math::NandlMetrics& target, double hintVal) {
+        if (wantsModel(m_cfg, model)) {
+            target = math::NandlCalculator::solveModel(
+                m_nandlInputs,
+                m_cfg.nandlParams,
+                model,
+                (hint && hintVal > 0.0) ? hintVal : 1.0
+            );
+        }
+    };
+
+    math::NandlSummary nextSummary = m_nandlSummary;
+    solveIf(math::NandlModel::Base, nextSummary.base, hint ? hint->base.lStar : 1.0);
+    solveIf(math::NandlModel::Nerve, nextSummary.nerve, hint ? hint->nerve.lStar : 1.0);
+    solveIf(math::NandlModel::Fatigue, nextSummary.fatigue, hint ? hint->fatigue.lStar : 1.0);
+    solveIf(math::NandlModel::CPS, nextSummary.cps, hint ? hint->cps.lStar : 1.0);
+    solveIf(math::NandlModel::NerveFatigue, nextSummary.nerveFatigue, hint ? hint->nerveFatigue.lStar : 1.0);
+    solveIf(math::NandlModel::NerveCPS, nextSummary.nerveCps, hint ? hint->nerveCps.lStar : 1.0);
+    solveIf(math::NandlModel::FatigueCPS, nextSummary.fatigueCps, hint ? hint->fatigueCps.lStar : 1.0);
+    solveIf(math::NandlModel::NFC, nextSummary.nfc, hint ? hint->nfc.lStar : 1.0);
+
+    m_nandlSummary = nextSummary;
     m_hasNandlSummary = true;
 
     m_stats.currentLStar = m_nandlSummary.nfc.lStar;
@@ -637,8 +733,10 @@ void ProbeController::recordMeasurement(
     std::uint64_t releaseWindow,
     bool showPress,
     bool pressOver,
+    bool pressNandlIgnored,
     bool showRelease,
-    bool releaseOver
+    bool releaseOver,
+    bool releaseNandlIgnored
 ) {
     if (!layer || !layer->m_objectLayer) return;
 
@@ -656,14 +754,18 @@ void ProbeController::recordMeasurement(
             ? job.activationPos
             : job.pressPos;
         attachMarker(layer, pos, pressWindow, false, pressOver, !mergeSound);
-        recordNandlAndUpdate(pressFrameOf(job), pressWindow, false);
+    }
+    if ((showPress && !pressOver) || pressNandlIgnored) {
+        recordNandlAndUpdate(pressFrameOf(job), pressWindow, false, pressNandlIgnored);
     }
 
     if (showRelease) {
         const auto relFrame = releaseFrameOf(job);
         const auto releasePos = (relFrame != job.releaseFrame) ? job.activationPos : job.releasePos;
         attachMarker(layer, releasePos, releaseWindow, true, releaseOver, !mergeSound);
-        recordNandlAndUpdate(relFrame, releaseWindow, true);
+    }
+    if ((showRelease && !releaseOver) || releaseNandlIgnored) {
+        recordNandlAndUpdate(releaseFrameOf(job), releaseWindow, true, releaseNandlIgnored);
     }
 
     if (mergeSound && soundFrames > 0) {
