@@ -173,7 +173,8 @@ void ProbeController::saveHistory(PlayLayer* layer, PlayerObject* player) {
     slot.valid = true;
     for (int btn = static_cast<int>(PlayerButton::Jump);
          btn <= static_cast<int>(PlayerButton::Right); ++btn) {
-        slot.held[btn] = player->m_holdingButtons[btn];
+        auto it = player->m_holdingButtons.find(btn);
+        slot.held[btn] = (it != player->m_holdingButtons.end()) && it->second;
     }
 
     slot.touchingRings.clear();

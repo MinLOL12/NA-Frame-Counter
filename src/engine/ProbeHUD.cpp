@@ -204,10 +204,9 @@ void ProbeController::pulseHUD(std::uint64_t windowFrames, bool isRelease, bool 
         value->setString(fmt::format("{}", row.count).c_str());
         value->setColor({255, 255, 255});
         value->setScale(0.60f);
-        value->runAction(CCSpawn::create(
+        value->runAction(CCSpawn::createWithTwoActions(
             CCScaleTo::create(0.20f, 0.48f),
-            CCTintTo::create(0.30f, row.baseColor.r, row.baseColor.g, row.baseColor.b),
-            nullptr
+            CCTintTo::create(0.30f, row.baseColor.r, row.baseColor.g, row.baseColor.b)
         ));
 
         auto* mod = Mod::get();
@@ -229,10 +228,9 @@ void ProbeController::pulseHUD(std::uint64_t windowFrames, bool isRelease, bool 
             glow->setColor(row.baseColor);
             glow->setOpacity(150);
             m_hud->addChild(glow, 1);
-            glow->runAction(CCSequence::create(
+            glow->runAction(CCSequence::createWithTwoActions(
                 CCFadeOut::create(0.45f),
-                CCRemoveSelf::create(),
-                nullptr
+                CCRemoveSelf::create()
             ));
         }
         return;

@@ -228,7 +228,7 @@ class $modify(NAFMODAudioEngine, FMODAudioEngine) {
         int fadeOut,
         bool loopEnabled,
         int effectID,
-        bool override,
+        bool overrideSound,
         bool noPreload,
         int channelID,
         int uniqueID,
@@ -241,7 +241,7 @@ class $modify(NAFMODAudioEngine, FMODAudioEngine) {
         return FMODAudioEngine::playEffectAdvanced(
             path, speed, unknown, volume, pitch, fastFourierTransform, reverb,
             startMillis, endMillis, fadeIn, fadeOut, loopEnabled, effectID,
-            override, noPreload, channelID, uniqueID, minInterval, sfxGroup
+            overrideSound, noPreload, channelID, uniqueID, minInterval, sfxGroup
         );
     }
 };
