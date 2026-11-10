@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <memory>
+#include <utility>
 
 using namespace geode::prelude;
 using namespace cocos2d;
@@ -170,7 +172,7 @@ bool ModMenuPopup::init() {
     footerMenu->addChild(settingsBtn);
 
     auto* resetSpr = ButtonSprite::create("Reset All", 62, true, "goldFont.fnt", "GJ_button_06.png", 26.f, 0.42f);
-    auto* resetBtn = CCMenuItemExt::createSpriteExtra(resetSpr, [self = Ref(this)](CCMenuItemSpriteExtra*) {
+    auto* resetBtn = CCMenuItemExt::createSpriteExtra(resetSpr, [self = geode::Ref<ModMenuPopup>(this)](CCMenuItemSpriteExtra*) {
         geode::createQuickPopup(
             "Reset NA Frame Counter",
             "Reset all <cy>NA Frame Counter</c> settings back to their defaults?",
@@ -328,14 +330,15 @@ void ModMenuPopup::addToggleRow(
     row->addChild(menu, 2);
 
     std::string keyCopy(settingKey);
+    auto sharedCb = std::make_shared<geode::Function<void(bool)>>(std::move(extraCallback));
     auto* toggler = CCMenuItemExt::createTogglerWithStandardSprites(
         0.66f,
-        [keyCopy, cb = std::move(extraCallback)](CCMenuItemToggler* sender) mutable {
+        [keyCopy, sharedCb](CCMenuItemToggler* sender) {
             // Note: CCMenuItemToggler callback runs BEFORE m_toggled flips in GD!
             const bool nextVal = !sender->isToggled();
             core::SettingsBridge::setBool(keyCopy, nextVal);
             engine::ProbeController::get().onSettingsChanged();
-            if (cb) cb(nextVal);
+            if (sharedCb && *sharedCb) (*sharedCb)(nextVal);
         }
     );
     toggler->toggle(value);
@@ -598,7 +601,7 @@ void ModMenuPopup::rebuildCurrentTab() {
                         box->addChild(tag, 1);
                     }
                     std::string keyStr(sw.key);
-                    auto* btn = CCMenuItemExt::createSpriteExtra(box, [self = Ref(this), keyStr](CCMenuItemSpriteExtra*) {
+                    auto* btn = CCMenuItemExt::createSpriteExtra(box, [self = geode::Ref<ModMenuPopup>(this), keyStr](CCMenuItemSpriteExtra*) {
                         auto* m = Mod::get();
                         ccColor3B curr = m ? m->getSettingValue<ccColor3B>(keyStr) : ccColor3B{255, 255, 255};
                         auto* picker = ColorPickPopup::create(curr);

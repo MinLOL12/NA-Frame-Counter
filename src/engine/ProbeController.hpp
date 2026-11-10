@@ -205,7 +205,7 @@ private:
     std::deque<JumpEvent> m_jumps;
 
     // Probe objects
-    CCLayer* m_probeLayer = nullptr;
+    cocos2d::CCLayer* m_probeLayer = nullptr;
     PlayerObject* m_probeP1 = nullptr;
     PlayerObject* m_probeP2 = nullptr;
     PlayerObject* m_probePlayer = nullptr;
