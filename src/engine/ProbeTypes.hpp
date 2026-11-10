@@ -215,7 +215,7 @@ struct PathState {
 };
 
 struct RingMarker {
-    geode::Ref<cocos2d::CCNode> node;
+    cocos2d::CCNode* node = nullptr;
     cocos2d::CCDrawNode* ring = nullptr;
     cocos2d::CCLabelBMFont* label = nullptr;
     cocos2d::ccColor3B color{255, 255, 255};

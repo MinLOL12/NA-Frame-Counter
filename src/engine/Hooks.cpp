@@ -211,6 +211,11 @@ class $modify(NAPauseLayer, PauseLayer) {
         ProbeController::get().pauseEnd(PlayLayer::get());
         PauseLayer::onRestartFull(sender);
     }
+
+    void goEdit() {
+        ProbeController::get().pauseEnd(PlayLayer::get());
+        PauseLayer::goEdit();
+    }
 };
 
 class $modify(NAFMODAudioEngine, FMODAudioEngine) {

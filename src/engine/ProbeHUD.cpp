@@ -15,6 +15,12 @@ namespace na_frame_counter::engine {
 
 namespace {
 
+bool hasChild(CCNode* parent, CCNode* child) {
+    if (!parent || !child) return false;
+    auto* children = parent->getChildren();
+    return children && children->containsObject(child);
+}
+
 ccColor3B toCCColor(core::RGBColor c) {
     return ccc3(c.r, c.g, c.b);
 }
@@ -41,29 +47,41 @@ std::string formatProb(double p) {
 } // namespace
 
 void ProbeController::clearHUD() {
-    m_counters.clear();
+    auto* hudSentinel = m_hudSentinel;
+    m_hudSentinel = nullptr;
+    if (hudSentinel) {
+        hudSentinel->disarm();
+    }
+
+    auto* hud = m_hud;
+    m_hud = nullptr;
     m_lastBadgeLabel = nullptr;
-    if (m_hud) {
-        if (m_hud->getParent()) {
-            m_hud->removeFromParentAndCleanup(true);
-        }
-        m_hud = nullptr;
+    m_counters.clear();
+
+    if (hud && hud->getParent()) {
+        hud->removeFromParentAndCleanup(true);
     }
 }
 
 void ProbeController::resetHUD() {
+    if (!m_level || !m_hud || m_hud->getParent() != m_level) return;
+
     for (auto& row : m_counters) {
         row.count = 0;
-        if (row.valueLabel) {
+        if (hasChild(m_hud, row.valueLabel)) {
             row.valueLabel->stopAllActions();
             row.valueLabel->setString("0");
             row.valueLabel->setScale(0.48f);
             row.valueLabel->setColor(row.baseColor);
+        } else {
+            row.valueLabel = nullptr;
         }
     }
-    if (m_lastBadgeLabel) {
+    if (hasChild(m_hud, m_lastBadgeLabel)) {
         m_lastBadgeLabel->setString("Last: --");
         m_lastBadgeLabel->setColor({200, 200, 200});
+    } else {
+        m_lastBadgeLabel = nullptr;
     }
 }
 
@@ -108,6 +126,10 @@ void ProbeController::buildHUD() {
 
     root->setPosition({anchorX, startY});
     root->setID("tally-hud"_spr);
+    m_hudSentinel = CleanupSentinel::create(SentinelKind::Hud, root);
+    if (m_hudSentinel) {
+        root->addChild(m_hudSentinel, -999999);
+    }
     m_level->addChild(root, 1000002);
     m_hud = root;
 
@@ -181,14 +203,18 @@ void ProbeController::buildHUD() {
 }
 
 void ProbeController::pulseHUD(std::uint64_t windowFrames, bool isRelease, bool overLimit) {
-    if (m_lastBadgeLabel) {
+    if (!m_level || !m_hud || m_hud->getParent() != m_level) return;
+
+    if (hasChild(m_hud, m_lastBadgeLabel)) {
         m_lastBadgeLabel->setString(formatLastBadge(m_stats, m_cfg.maxWindowFrames).c_str());
         if (windowFrames > 0) {
             m_lastBadgeLabel->setColor(toCCColor(core::colorForWindow(windowFrames, m_cfg)));
         }
+    } else {
+        m_lastBadgeLabel = nullptr;
     }
 
-    if (!m_hud || windowFrames == 0 || overLimit) return;
+    if (windowFrames == 0 || overLimit) return;
 
     for (auto& row : m_counters) {
         if (static_cast<std::int64_t>(windowFrames) < row.bucket.minFrames ||
@@ -197,8 +223,11 @@ void ProbeController::pulseHUD(std::uint64_t windowFrames, bool isRelease, bool 
         }
 
         ++row.count;
+        if (!hasChild(m_hud, row.valueLabel)) {
+            row.valueLabel = nullptr;
+            return;
+        }
         auto* value = row.valueLabel;
-        if (!value) return;
 
         value->stopAllActions();
         value->setString(fmt::format("{}", row.count).c_str());
@@ -238,11 +267,16 @@ void ProbeController::pulseHUD(std::uint64_t windowFrames, bool isRelease, bool 
 }
 
 void ProbeController::clearPrecisionHUD() {
-    if (m_precHud) {
-        if (m_precHud->getParent()) {
-            m_precHud->removeFromParentAndCleanup(true);
-        }
-        m_precHud = nullptr;
+    auto* precSentinel = m_precHudSentinel;
+    m_precHudSentinel = nullptr;
+    if (precSentinel) {
+        precSentinel->disarm();
+    }
+
+    auto* precHud = m_precHud;
+    m_precHud = nullptr;
+    if (precHud && precHud->getParent()) {
+        precHud->removeFromParentAndCleanup(true);
     }
 }
 
@@ -254,6 +288,10 @@ void ProbeController::buildPrecisionHUD() {
     if (!node) return;
     node->setPosition({8.f, 8.f});
     node->setID("precision-hud"_spr);
+    m_precHudSentinel = CleanupSentinel::create(SentinelKind::PrecHud, node);
+    if (m_precHudSentinel) {
+        node->addChild(m_precHudSentinel, -999999);
+    }
     m_level->addChild(node, 1000002);
     m_precHud = node;
 
@@ -261,8 +299,22 @@ void ProbeController::buildPrecisionHUD() {
 }
 
 void ProbeController::updatePrecisionHUD() {
-    if (!m_precHud) return;
-    m_precHud->removeAllChildrenWithCleanup(true);
+    if (!m_level || !m_precHud || m_precHud->getParent() != m_level) return;
+
+    // Remove all label children while preserving our sentinel child
+    if (auto* children = m_precHud->getChildren()) {
+        std::vector<CCNode*> toRemove;
+        toRemove.reserve(children->count());
+        for (unsigned int i = 0; i < children->count(); ++i) {
+            auto* child = static_cast<CCNode*>(children->objectAtIndex(i));
+            if (child && child != m_precHudSentinel) {
+                toRemove.push_back(child);
+            }
+        }
+        for (auto* child : toRemove) {
+            child->removeFromParentAndCleanup(true);
+        }
+    }
 
     if (!m_cfg.enabled || !m_cfg.showPrecisionHud || m_platformer) return;
 
@@ -440,16 +492,27 @@ CCNode* ProbeController::createRingMarkerNode(
 }
 
 void ProbeController::clearMarkers() {
-    for (auto const& entry : m_markers) {
-        if (entry.node && entry.node->getParent()) {
-            entry.node->removeFromParentAndCleanup(true);
-        }
+    auto* markerSentinel = m_markerSentinel;
+    m_markerSentinel = nullptr;
+    if (markerSentinel) {
+        markerSentinel->disarm();
     }
+
+    auto* markerLayer = m_markerLayer;
+    m_markerLayer = nullptr;
     m_markers.clear();
+
+    if (markerLayer && markerLayer->getParent()) {
+        markerLayer->removeFromParentAndCleanup(true);
+    }
 }
 
 void ProbeController::moveMarkers(PlayLayer* layer, float dt) {
     if (!layer || layer != m_level || !layer->m_objectLayer) return;
+    if (!m_markerLayer || m_markerLayer->getParent() != layer) {
+        m_markers.clear();
+        return;
+    }
 
     float baseScale = std::clamp(m_cfg.markerScale, 0.5f, 2.0f);
     if (m_cfg.scaleWithZoom) {
@@ -460,7 +523,7 @@ void ProbeController::moveMarkers(PlayLayer* layer, float dt) {
     const float fadeTotal = m_cfg.markerFadeSeconds;
 
     for (auto it = m_markers.begin(); it != m_markers.end();) {
-        if (!it->node) {
+        if (!hasChild(m_markerLayer, it->node)) {
             it = m_markers.erase(it);
             continue;
         }
@@ -468,9 +531,7 @@ void ProbeController::moveMarkers(PlayLayer* layer, float dt) {
         if (fadeTotal > 0.05f && !m_paused && dt > 0.f) {
             it->age += dt;
             if (it->age >= fadeTotal) {
-                if (it->node->getParent()) {
-                    it->node->removeFromParentAndCleanup(true);
-                }
+                it->node->removeFromParentAndCleanup(true);
                 it = m_markers.erase(it);
                 continue;
             }
@@ -480,11 +541,13 @@ void ProbeController::moveMarkers(PlayLayer* layer, float dt) {
                     1.f - (it->age - fadeStart) / std::max(0.01f, fadeTotal - fadeStart),
                     0.f, 1.f
                 );
-                drawRingCircles(
-                    it->ring, it->color, it->radius, it->border,
-                    it->isRelease, it->distinguishRelease, alpha
-                );
-                if (it->label) {
+                if (hasChild(it->node, it->ring)) {
+                    drawRingCircles(
+                        it->ring, it->color, it->radius, it->border,
+                        it->isRelease, it->distinguishRelease, alpha
+                    );
+                }
+                if (hasChild(it->node, it->label)) {
                     it->label->setOpacity(static_cast<GLubyte>(alpha * 255.f));
                 }
             }
@@ -505,7 +568,7 @@ void ProbeController::attachMarker(
     bool overLimit,
     bool withSound
 ) {
-    if (!layer || !layer->m_objectLayer) return;
+    if (!layer || layer != m_level || !layer->m_objectLayer) return;
 
     ++m_stats.totalMeasured;
     if (windowFrames == 1 && !overLimit) {
@@ -526,12 +589,25 @@ void ProbeController::attachMarker(
 
     if (!m_cfg.showRings || (windowFrames == 0 && !overLimit)) return;
 
+    if (!m_markerLayer || m_markerLayer->getParent() != layer) {
+        clearMarkers();
+        auto* markerLayer = CCNode::create();
+        if (!markerLayer) return;
+        markerLayer->setID("markers-layer"_spr);
+        m_markerSentinel = CleanupSentinel::create(SentinelKind::MarkerLayer, markerLayer);
+        if (m_markerSentinel) {
+            markerLayer->addChild(m_markerSentinel, -999999);
+        }
+        layer->addChild(markerLayer, 1000000);
+        m_markerLayer = markerLayer;
+    }
+
     CCDrawNode* ring = nullptr;
     CCLabelBMFont* label = nullptr;
     auto* marker = createRingMarkerNode(windowFrames, isRelease, overLimit, ring, label);
     if (!marker) return;
 
-    layer->addChild(marker, 1000000);
+    m_markerLayer->addChild(marker, 1);
     RingMarker item;
     item.node = marker;
     item.ring = ring;
@@ -543,10 +619,10 @@ void ProbeController::attachMarker(
     item.distinguishRelease = m_cfg.distinguishRelease;
     item.worldPosition = position;
     item.age = 0.f;
-    m_markers.push_back(std::move(item));
+    m_markers.push_back(item);
 
     while (m_markers.size() > kMaxVisibleMarkers) {
-        if (m_markers.front().node && m_markers.front().node->getParent()) {
+        if (hasChild(m_markerLayer, m_markers.front().node)) {
             m_markers.front().node->removeFromParentAndCleanup(true);
         }
         m_markers.pop_front();

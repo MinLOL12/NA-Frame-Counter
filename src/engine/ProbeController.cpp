@@ -10,12 +10,44 @@ using namespace cocos2d;
 
 namespace na_frame_counter::engine {
 
+namespace {
+bool s_controllerAlive = false;
+} // namespace
+
+CleanupSentinel* CleanupSentinel::create(SentinelKind kind, void* expected) {
+    auto* ret = new CleanupSentinel();
+    if (ret && ret->init()) {
+        ret->m_kind = kind;
+        ret->m_expected = expected;
+        ret->setVisible(false);
+        ret->autorelease();
+        return ret;
+    }
+    CC_SAFE_DELETE(ret);
+    return nullptr;
+}
+
+CleanupSentinel::~CleanupSentinel() {
+    if (m_armed && s_controllerAlive) {
+        ProbeController::get().onSentinelDestroyed(m_kind, m_expected);
+    }
+}
+
+ProbeController::ProbeController() {
+    s_controllerAlive = true;
+}
+
+ProbeController::~ProbeController() {
+    s_controllerAlive = false;
+}
+
 void ProbeController::onSettingsChanged() {
+    if (m_suppressSettingsChanged) return;
     m_cfg = core::SettingsBridge::read();
     audio::SoundPlayer::get().preload(m_cfg);
 
     if (m_level && !m_levelDone) {
-        if (!m_cfg.enabled) {
+        if (!m_cfg.enabled || m_platformer) {
             clearHUD();
             clearPrecisionHUD();
             clearMarkers();
@@ -26,12 +58,100 @@ void ProbeController::onSettingsChanged() {
     }
 }
 
+void ProbeController::onSentinelDestroyed(SentinelKind kind, void* expected) {
+    switch (kind) {
+        case SentinelKind::Hud:
+            if (m_hud == expected) {
+                m_hudSentinel = nullptr;
+                m_hud = nullptr;
+                m_lastBadgeLabel = nullptr;
+                m_counters.clear();
+            }
+            break;
+        case SentinelKind::PrecHud:
+            if (m_precHud == expected) {
+                m_precHudSentinel = nullptr;
+                m_precHud = nullptr;
+            }
+            break;
+        case SentinelKind::MarkerLayer:
+            if (m_markerLayer == expected) {
+                m_markerSentinel = nullptr;
+                m_markerLayer = nullptr;
+                m_markers.clear();
+            }
+            break;
+        case SentinelKind::Level:
+            if (m_level == expected) {
+                m_levelSentinel = nullptr;
+                m_hudSentinel = nullptr;
+                m_precHudSentinel = nullptr;
+                m_markerSentinel = nullptr;
+
+                m_hud = nullptr;
+                m_lastBadgeLabel = nullptr;
+                m_precHud = nullptr;
+                m_markerLayer = nullptr;
+                m_counters.clear();
+                m_markers.clear();
+
+                m_probeLayer = nullptr;
+                m_probeP1 = nullptr;
+                m_probeP2 = nullptr;
+                m_probePlayer = nullptr;
+                m_probeG1 = nullptr;
+                m_probeG2 = nullptr;
+                m_ground1 = nullptr;
+                m_ground2 = nullptr;
+                clearHistory();
+
+                m_probing = false;
+                m_replayingInput = false;
+                m_ring = nullptr;
+                m_portals.clear();
+                m_level = nullptr;
+                m_platformer = false;
+                m_levelDone = false;
+                m_resetting = false;
+                m_paused = false;
+                m_resetDepth = 0;
+
+                m_started = false;
+                m_clockReady = false;
+                m_attemptDone = false;
+                m_sendingJump = false;
+                m_jumpP1 = true;
+                m_lastFrame = 0;
+                m_attemptStartFrame = 0;
+                m_orderCounter = 1;
+                m_jumpCount = 0;
+
+                m_events.clear();
+                m_clicks.clear();
+                m_jumps.clear();
+                m_measuredWindows.clear();
+                m_nandlInputs.clear();
+                m_nandlSummary = math::NandlSummary{};
+                m_hasNandlSummary = false;
+                m_stats.currentLStar = 0.0;
+                m_stats.lastWindowFrames = 0;
+            }
+            break;
+    }
+}
+
 void ProbeController::startLevel(PlayLayer* layer) {
     if (!layer) return;
     resetAllState();
 
     m_cfg = core::SettingsBridge::read();
     m_level = layer;
+    m_levelSentinel = CleanupSentinel::create(SentinelKind::Level, layer);
+    if (m_levelSentinel) {
+        m_levelSentinel->setID("level-sentinel"_spr);
+        layer->addChild(m_levelSentinel, -999999);
+    }
+
     m_platformer = layer->m_level && layer->m_level->isPlatformer();
     m_stats = SessionStats{};
     m_stats.attempts = 1;
@@ -80,6 +200,15 @@ void ProbeController::resetAllState() {
     clearMarkers();
     clearHUD();
     clearPrecisionHUD();
+
+    auto* levelSentinel = m_levelSentinel;
+    m_levelSentinel = nullptr;
+    if (levelSentinel) {
+        levelSentinel->disarm();
+        if (levelSentinel->getParent()) {
+            levelSentinel->removeFromParentAndCleanup(true);
+        }
+    }
 
     m_level = nullptr;
     m_platformer = false;

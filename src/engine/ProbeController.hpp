@@ -4,6 +4,25 @@
 
 namespace na_frame_counter::engine {
 
+enum class SentinelKind {
+    Level,
+    Hud,
+    PrecHud,
+    MarkerLayer,
+};
+
+class CleanupSentinel final : public cocos2d::CCNode {
+public:
+    static CleanupSentinel* create(SentinelKind kind, void* expected);
+    void disarm() { m_armed = false; }
+    ~CleanupSentinel() override;
+
+private:
+    SentinelKind m_kind = SentinelKind::Level;
+    void* m_expected = nullptr;
+    bool m_armed = true;
+};
+
 class ProbeController {
 public:
     static ProbeController& get() {
@@ -12,7 +31,9 @@ public:
     }
 
     // Settings & Stats
+    void setSuppressSettingsChanged(bool suppress) { m_suppressSettingsChanged = suppress; }
     void onSettingsChanged();
+    void onSentinelDestroyed(SentinelKind kind, void* expected);
     core::ModSettingsSnapshot const& config() const { return m_cfg; }
     SessionStats const& stats() const { return m_stats; }
     bool isPlatformer() const { return m_platformer; }
@@ -55,7 +76,8 @@ public:
     void probeDone();
 
 private:
-    ProbeController() = default;
+    ProbeController();
+    ~ProbeController();
 
     // Frame timing & mode helpers
     std::int64_t rawFrame(PlayLayer* layer) const;
@@ -235,6 +257,12 @@ private:
     cocos2d::CCNode* m_hud = nullptr;
     cocos2d::CCLabelBMFont* m_lastBadgeLabel = nullptr;
     cocos2d::CCNode* m_precHud = nullptr;
+    cocos2d::CCNode* m_markerLayer = nullptr;
+    CleanupSentinel* m_levelSentinel = nullptr;
+    CleanupSentinel* m_hudSentinel = nullptr;
+    CleanupSentinel* m_precHudSentinel = nullptr;
+    CleanupSentinel* m_markerSentinel = nullptr;
+    bool m_suppressSettingsChanged = false;
     std::vector<CountRow> m_counters;
     std::vector<std::uint64_t> m_measuredWindows; // for rebuilding HUD mid-attempt
     std::deque<RingMarker> m_markers;

@@ -21,14 +21,26 @@ public:
 
     static ModMenuPopup* create();
     static ModMenuPopup* openOrFocus();
-    void closePopup() { this->onClose(nullptr); }
+    void closePopup() {
+        if (!m_closed) {
+            this->onClose(nullptr);
+        }
+    }
 
 protected:
     bool init() override;
     void onClose(cocos2d::CCObject* sender) override;
 
 private:
+    struct TabButtonEntry {
+        Tab tab = Tab::Engine;
+        char const* label = "";
+        float width = 86.f;
+        CCMenuItemSpriteExtra* button = nullptr;
+    };
+
     Tab m_activeTab = Tab::Engine;
+    bool m_closed = false;
 
     cocos2d::CCNode* m_tabBar = nullptr;
     cocos2d::CCNode* m_contentContainer = nullptr;
@@ -37,9 +49,10 @@ private:
     cocos2d::CCNode* m_previewBox = nullptr;
     cocos2d::CCLabelBMFont* m_statsLabel = nullptr;
 
-    std::vector<CCMenuItemSpriteExtra*> m_tabButtons;
+    std::vector<TabButtonEntry> m_tabButtons;
 
     void buildTabBar();
+    void updateTabBarVisuals();
     void selectTab(Tab tab);
     void rebuildCurrentTab();
     void refreshStatsFooter();
