@@ -15,6 +15,12 @@ namespace na_frame_counter::engine {
 
 namespace {
 
+bool hasChild(CCNode* parent, CCNode* child) {
+    if (!parent || !child) return false;
+    auto* children = parent->getChildren();
+    return children && children->containsObject(child);
+}
+
 ccColor3B toCCColor(core::RGBColor c) {
     return ccc3(c.r, c.g, c.b);
 }
@@ -38,32 +44,87 @@ std::string formatProb(double p) {
     return fmt::format("{:.2e}%", pct);
 }
 
+std::string formatDuration(double seconds) {
+    if (!std::isfinite(seconds) || seconds < 0.0) return "0.00s";
+    if (seconds < 60.0) return fmt::format("{:.2f}s", seconds);
+    if (seconds < 3600.0) {
+        const int mins = static_cast<int>(seconds / 60.0);
+        const double rem = seconds - mins * 60.0;
+        return fmt::format("{}m{:.1f}s", mins, rem);
+    }
+    const double hrs = seconds / 3600.0;
+    return fmt::format("{:.2f}h", hrs);
+}
+
+bool wantsModel(core::ModSettingsSnapshot const& cfg, math::NandlModel model) {
+    using D = core::NandlDisplayMode;
+    using M = math::NandlModel;
+    if (model == M::NFC) return true; // Always compute NFC for SessionStats.currentLStar / bestLStar
+    switch (cfg.nandlDisplay) {
+        case D::Base: return model == M::Base;
+        case D::Nerve: return model == M::Nerve;
+        case D::Fatigue: return model == M::Fatigue;
+        case D::CPS: return model == M::CPS;
+        case D::NerveFatigue: return model == M::NerveFatigue;
+        case D::NerveCPS: return model == M::NerveCPS;
+        case D::FatigueCPS: return model == M::FatigueCPS;
+        case D::AllModels: return true;
+        case D::Custom:
+            switch (model) {
+                case M::Base: return cfg.nandlCustom.base;
+                case M::Nerve: return cfg.nandlCustom.nerve;
+                case M::Fatigue: return cfg.nandlCustom.fatigue;
+                case M::CPS: return cfg.nandlCustom.cps;
+                case M::NerveFatigue: return cfg.nandlCustom.nerveFatigue;
+                case M::NerveCPS: return cfg.nandlCustom.nerveCps;
+                case M::FatigueCPS: return cfg.nandlCustom.fatigueCps;
+                case M::NFC: return true;
+            }
+            return false;
+        case D::NFC:
+        default:
+            return false;
+    }
+}
+
 } // namespace
 
 void ProbeController::clearHUD() {
-    m_counters.clear();
+    auto* hudSentinel = m_hudSentinel;
+    m_hudSentinel = nullptr;
+    if (hudSentinel) {
+        hudSentinel->disarm();
+    }
+
+    auto* hud = m_hud;
+    m_hud = nullptr;
     m_lastBadgeLabel = nullptr;
-    if (m_hud) {
-        if (m_hud->getParent()) {
-            m_hud->removeFromParentAndCleanup(true);
-        }
-        m_hud = nullptr;
+    m_counters.clear();
+
+    if (hud && hud->getParent()) {
+        hud->removeFromParentAndCleanup(true);
     }
 }
 
 void ProbeController::resetHUD() {
+    if (!m_level || !m_hud || m_hud->getParent() != m_level) return;
+
     for (auto& row : m_counters) {
         row.count = 0;
-        if (row.valueLabel) {
+        if (hasChild(m_hud, row.valueLabel)) {
             row.valueLabel->stopAllActions();
             row.valueLabel->setString("0");
             row.valueLabel->setScale(0.48f);
             row.valueLabel->setColor(row.baseColor);
+        } else {
+            row.valueLabel = nullptr;
         }
     }
-    if (m_lastBadgeLabel) {
+    if (hasChild(m_hud, m_lastBadgeLabel)) {
         m_lastBadgeLabel->setString("Last: --");
         m_lastBadgeLabel->setColor({200, 200, 200});
+    } else {
+        m_lastBadgeLabel = nullptr;
     }
 }
 
@@ -108,6 +169,10 @@ void ProbeController::buildHUD() {
 
     root->setPosition({anchorX, startY});
     root->setID("tally-hud"_spr);
+    m_hudSentinel = CleanupSentinel::create(SentinelKind::Hud, root);
+    if (m_hudSentinel) {
+        root->addChild(m_hudSentinel, -999999);
+    }
     m_level->addChild(root, 1000002);
     m_hud = root;
 
@@ -181,14 +246,18 @@ void ProbeController::buildHUD() {
 }
 
 void ProbeController::pulseHUD(std::uint64_t windowFrames, bool isRelease, bool overLimit) {
-    if (m_lastBadgeLabel) {
+    if (!m_level || !m_hud || m_hud->getParent() != m_level) return;
+
+    if (hasChild(m_hud, m_lastBadgeLabel)) {
         m_lastBadgeLabel->setString(formatLastBadge(m_stats, m_cfg.maxWindowFrames).c_str());
         if (windowFrames > 0) {
             m_lastBadgeLabel->setColor(toCCColor(core::colorForWindow(windowFrames, m_cfg)));
         }
+    } else {
+        m_lastBadgeLabel = nullptr;
     }
 
-    if (!m_hud || windowFrames == 0 || overLimit) return;
+    if (windowFrames == 0 || overLimit) return;
 
     for (auto& row : m_counters) {
         if (static_cast<std::int64_t>(windowFrames) < row.bucket.minFrames ||
@@ -197,8 +266,11 @@ void ProbeController::pulseHUD(std::uint64_t windowFrames, bool isRelease, bool 
         }
 
         ++row.count;
+        if (!hasChild(m_hud, row.valueLabel)) {
+            row.valueLabel = nullptr;
+            return;
+        }
         auto* value = row.valueLabel;
-        if (!value) return;
 
         value->stopAllActions();
         value->setString(fmt::format("{}", row.count).c_str());
@@ -238,11 +310,16 @@ void ProbeController::pulseHUD(std::uint64_t windowFrames, bool isRelease, bool 
 }
 
 void ProbeController::clearPrecisionHUD() {
-    if (m_precHud) {
-        if (m_precHud->getParent()) {
-            m_precHud->removeFromParentAndCleanup(true);
-        }
-        m_precHud = nullptr;
+    auto* precSentinel = m_precHudSentinel;
+    m_precHudSentinel = nullptr;
+    if (precSentinel) {
+        precSentinel->disarm();
+    }
+
+    auto* precHud = m_precHud;
+    m_precHud = nullptr;
+    if (precHud && precHud->getParent()) {
+        precHud->removeFromParentAndCleanup(true);
     }
 }
 
@@ -254,6 +331,10 @@ void ProbeController::buildPrecisionHUD() {
     if (!node) return;
     node->setPosition({8.f, 8.f});
     node->setID("precision-hud"_spr);
+    m_precHudSentinel = CleanupSentinel::create(SentinelKind::PrecHud, node);
+    if (m_precHudSentinel) {
+        node->addChild(m_precHudSentinel, -999999);
+    }
     m_level->addChild(node, 1000002);
     m_precHud = node;
 
@@ -261,8 +342,22 @@ void ProbeController::buildPrecisionHUD() {
 }
 
 void ProbeController::updatePrecisionHUD() {
-    if (!m_precHud) return;
-    m_precHud->removeAllChildrenWithCleanup(true);
+    if (!m_level || !m_precHud || m_precHud->getParent() != m_level) return;
+
+    // Remove all label children while preserving our sentinel child
+    if (auto* children = m_precHud->getChildren()) {
+        std::vector<CCNode*> toRemove;
+        toRemove.reserve(children->count());
+        for (unsigned int i = 0; i < children->count(); ++i) {
+            auto* child = static_cast<CCNode*>(children->objectAtIndex(i));
+            if (child && child != m_precHudSentinel) {
+                toRemove.push_back(child);
+            }
+        }
+        for (auto* child : toRemove) {
+            child->removeFromParentAndCleanup(true);
+        }
+    }
 
     if (!m_cfg.enabled || !m_cfg.showPrecisionHud || m_platformer) return;
 
@@ -285,10 +380,18 @@ void ProbeController::updatePrecisionHUD() {
     }
 
     auto formatLine = [&](char const* name, math::NandlMetrics const& m) {
+        std::string out = fmt::format("{}: {:.2f} s/s", name, m.lStar);
         if (m_cfg.showPassProb) {
-            return fmt::format("{}: {:.2f} s/s  (P {})", name, m.lStar, formatProb(m.passProbability));
+            out += fmt::format("  (P {})", formatProb(m.passProbability));
         }
-        return fmt::format("{}: {:.2f} s/s", name, m.lStar);
+        if (m_cfg.showExpectedTime) {
+            out += fmt::format("  (Ta {})", formatDuration(m.expectedAttemptTime));
+        }
+        return out;
+    };
+
+    auto showIf = [&](bool cond, char const* name, math::NandlMetrics const& m, ccColor3B col) {
+        if (cond) addLine(formatLine(name, m), col);
     };
 
     switch (m_cfg.nandlDisplay) {
@@ -304,12 +407,37 @@ void ProbeController::updatePrecisionHUD() {
         case core::NandlDisplayMode::CPS:
             addLine(formatLine("CPS L*", m_nandlSummary.cps), {160, 255, 160});
             break;
+        case core::NandlDisplayMode::NerveFatigue:
+            addLine(formatLine("N+F L*", m_nandlSummary.nerveFatigue), {255, 225, 175});
+            break;
+        case core::NandlDisplayMode::NerveCPS:
+            addLine(formatLine("N+C L*", m_nandlSummary.nerveCps), {210, 255, 140});
+            break;
+        case core::NandlDisplayMode::FatigueCPS:
+            addLine(formatLine("F+C L*", m_nandlSummary.fatigueCps), {145, 255, 220});
+            break;
         case core::NandlDisplayMode::AllModels:
             addLine(formatLine("NFC L*", m_nandlSummary.nfc), {255, 130, 130});
+            addLine(formatLine("F+C L*", m_nandlSummary.fatigueCps), {145, 255, 220});
+            addLine(formatLine("N+C L*", m_nandlSummary.nerveCps), {210, 255, 140});
+            addLine(formatLine("N+F L*", m_nandlSummary.nerveFatigue), {255, 225, 175});
             addLine(formatLine("CPS L*", m_nandlSummary.cps), {160, 255, 160});
             addLine(formatLine("Fatigue L*", m_nandlSummary.fatigue), {150, 230, 255});
             addLine(formatLine("Nerve L*", m_nandlSummary.nerve), {255, 210, 120});
             addLine(formatLine("Base L*", m_nandlSummary.base), {255, 255, 255});
+            break;
+        case core::NandlDisplayMode::Custom:
+            showIf(m_cfg.nandlCustom.nfc, "NFC L*", m_nandlSummary.nfc, {255, 130, 130});
+            showIf(m_cfg.nandlCustom.fatigueCps, "F+C L*", m_nandlSummary.fatigueCps, {145, 255, 220});
+            showIf(m_cfg.nandlCustom.nerveCps, "N+C L*", m_nandlSummary.nerveCps, {210, 255, 140});
+            showIf(m_cfg.nandlCustom.nerveFatigue, "N+F L*", m_nandlSummary.nerveFatigue, {255, 225, 175});
+            showIf(m_cfg.nandlCustom.cps, "CPS L*", m_nandlSummary.cps, {160, 255, 160});
+            showIf(m_cfg.nandlCustom.fatigue, "Fatigue L*", m_nandlSummary.fatigue, {150, 230, 255});
+            showIf(m_cfg.nandlCustom.nerve, "Nerve L*", m_nandlSummary.nerve, {255, 210, 120});
+            showIf(m_cfg.nandlCustom.base, "Base L*", m_nandlSummary.base, {255, 255, 255});
+            if (y == 0.f) {
+                addLine(formatLine("NFC L*", m_nandlSummary.nfc), {255, 255, 255});
+            }
             break;
         case core::NandlDisplayMode::NFC:
         default:
@@ -321,22 +449,42 @@ void ProbeController::updatePrecisionHUD() {
 void ProbeController::recordNandlAndUpdate(
     std::int64_t actionFrame,
     std::uint64_t windowFrames,
-    bool isRelease
+    bool isRelease,
+    bool ignored
 ) {
-    if (windowFrames == 0) return;
+    if (!ignored && windowFrames == 0) return;
 
     math::InputTiming timing;
     timing.frame = static_cast<double>(std::max<std::int64_t>(0, actionFrame));
-    timing.windowFrames = static_cast<double>(windowFrames);
+    timing.windowFrames = ignored ? 0.0 : static_cast<double>(windowFrames);
     timing.swiftCount = 1;
     timing.isRelease = isRelease;
+    timing.ignored = ignored;
     m_nandlInputs.push_back(timing);
 
-    m_nandlSummary = math::NandlCalculator::solveAll(
-        m_nandlInputs,
-        m_cfg.nandlParams,
-        m_hasNandlSummary ? &m_nandlSummary : nullptr
-    );
+    const auto* hint = m_hasNandlSummary ? &m_nandlSummary : nullptr;
+    auto solveIf = [&](math::NandlModel model, math::NandlMetrics& target, double hintVal) {
+        if (wantsModel(m_cfg, model)) {
+            target = math::NandlCalculator::solveModel(
+                m_nandlInputs,
+                m_cfg.nandlParams,
+                model,
+                (hint && hintVal > 0.0) ? hintVal : 1.0
+            );
+        }
+    };
+
+    math::NandlSummary nextSummary = m_nandlSummary;
+    solveIf(math::NandlModel::Base, nextSummary.base, hint ? hint->base.lStar : 1.0);
+    solveIf(math::NandlModel::Nerve, nextSummary.nerve, hint ? hint->nerve.lStar : 1.0);
+    solveIf(math::NandlModel::Fatigue, nextSummary.fatigue, hint ? hint->fatigue.lStar : 1.0);
+    solveIf(math::NandlModel::CPS, nextSummary.cps, hint ? hint->cps.lStar : 1.0);
+    solveIf(math::NandlModel::NerveFatigue, nextSummary.nerveFatigue, hint ? hint->nerveFatigue.lStar : 1.0);
+    solveIf(math::NandlModel::NerveCPS, nextSummary.nerveCps, hint ? hint->nerveCps.lStar : 1.0);
+    solveIf(math::NandlModel::FatigueCPS, nextSummary.fatigueCps, hint ? hint->fatigueCps.lStar : 1.0);
+    solveIf(math::NandlModel::NFC, nextSummary.nfc, hint ? hint->nfc.lStar : 1.0);
+
+    m_nandlSummary = nextSummary;
     m_hasNandlSummary = true;
 
     m_stats.currentLStar = m_nandlSummary.nfc.lStar;
@@ -345,6 +493,193 @@ void ProbeController::recordNandlAndUpdate(
     }
 
     updatePrecisionHUD();
+}
+
+void ProbeController::clearPointsHUD() {
+    auto* sentinel = m_pointsSentinel;
+    m_pointsSentinel = nullptr;
+    if (sentinel) {
+        sentinel->disarm();
+    }
+
+    auto* hud = m_pointsHud;
+    m_pointsHud = nullptr;
+    m_pointsValueLabel = nullptr;
+    m_pointsLeftLabel = nullptr;
+    m_pointsRightLabel = nullptr;
+
+    if (hud && hud->getParent()) {
+        hud->removeFromParentAndCleanup(true);
+    }
+}
+
+void ProbeController::buildPointsHUD() {
+    clearPointsHUD();
+    if (!m_level || !m_cfg.enabled || !m_cfg.showPointsHud || m_platformer) return;
+
+    auto* root = CCNode::create();
+    if (!root) return;
+
+    const auto winSize = CCDirector::sharedDirector()->getWinSize();
+    const auto buckets = core::bandsForMax(m_cfg.maxWindowFrames, m_cfg.oneAtBottom);
+    constexpr float kRowSpacing = 14.5f;
+    const std::size_t totalTallyRows = buckets.size() + (m_cfg.showLastBadge ? 1 : 0);
+
+    constexpr float kCardWidth = 132.f;
+    constexpr float kCardHeight = 36.f;
+    const float anchorX = winSize.width - 10.f;
+    float topY = winSize.height - 50.f;
+
+    switch (m_cfg.pointsCorner) {
+        case core::PointsCorner::MiddleRight:
+            topY = winSize.height * 0.50f + kCardHeight * 0.5f;
+            break;
+        case core::PointsCorner::BottomRight:
+            topY = kCardHeight + 10.f;
+            if (m_cfg.showCounters && m_cfg.hudCorner == core::HudCorner::BottomRight) {
+                const float tallyTop = 14.f + kRowSpacing * static_cast<float>(
+                    totalTallyRows > 0 ? totalTallyRows - 1 : 0
+                ) + 10.f;
+                topY = std::max(topY, tallyTop + kCardHeight + 6.f);
+            }
+            break;
+        case core::PointsCorner::TopRight:
+        default:
+            topY = winSize.height - 50.f;
+            if (m_cfg.showCounters && m_cfg.hudCorner == core::HudCorner::TopRight) {
+                const float tallyBottom = (winSize.height - 14.f) - kRowSpacing * static_cast<float>(totalTallyRows);
+                topY = std::min(topY, tallyBottom - 6.f);
+            }
+            break;
+    }
+
+    root->setPosition({anchorX, topY});
+    root->setID("points-hud"_spr);
+    m_pointsSentinel = CleanupSentinel::create(SentinelKind::PointsHud, root);
+    if (m_pointsSentinel) {
+        root->addChild(m_pointsSentinel, -999999);
+    }
+    m_level->addChild(root, 1000002);
+    m_pointsHud = root;
+
+    if (auto* bg = NineSlice::create("square02b_001.png")) {
+        bg->setContentSize({kCardWidth, kCardHeight});
+        bg->setColor({10, 14, 24});
+        bg->setOpacity(135);
+        bg->setPosition({-kCardWidth * 0.5f, -kCardHeight * 0.5f});
+        root->addChild(bg, 0);
+    }
+
+    const int decimals = std::clamp(m_cfg.pointsDecimals, 1, 4);
+    const auto ptsText = fmt::format("Pts: {:.{}f}", m_stats.totalPoints, decimals);
+    if (auto* valLabel = CCLabelBMFont::create(ptsText.c_str(), "bigFont.fnt")) {
+        valLabel->setAnchorPoint({1.f, 0.5f});
+        valLabel->setPosition({-8.f, -12.f});
+        valLabel->setScale(0.42f);
+        valLabel->limitLabelWidth(kCardWidth - 16.f, 0.42f, 0.20f);
+        valLabel->setColor({255, 232, 120});
+        root->addChild(valLabel, 1);
+        m_pointsValueLabel = valLabel;
+    }
+
+    const auto fpText = fmt::format("1F: {}", m_stats.attemptFramePerfects);
+    if (auto* leftLabel = CCLabelBMFont::create(fpText.c_str(), "bigFont.fnt")) {
+        leftLabel->setAnchorPoint({0.f, 0.5f});
+        leftLabel->setPosition({-kCardWidth + 8.f, -27.f});
+        leftLabel->setScale(0.28f);
+        leftLabel->limitLabelWidth(54.f, 0.28f, 0.16f);
+        leftLabel->setColor({205, 220, 240});
+        root->addChild(leftLabel, 1);
+        m_pointsLeftLabel = leftLabel;
+    }
+
+    const auto bestText = fmt::format("Best: {:.{}f}", m_stats.bestPoints, decimals);
+    if (auto* rightLabel = CCLabelBMFont::create(bestText.c_str(), "bigFont.fnt")) {
+        rightLabel->setAnchorPoint({1.f, 0.5f});
+        rightLabel->setPosition({-8.f, -27.f});
+        rightLabel->setScale(0.28f);
+        rightLabel->limitLabelWidth(64.f, 0.28f, 0.16f);
+        rightLabel->setColor({145, 225, 255});
+        root->addChild(rightLabel, 1);
+        m_pointsRightLabel = rightLabel;
+    }
+}
+
+void ProbeController::resetPointsHUD() {
+    updatePointsHUD(0.0, 0);
+}
+
+void ProbeController::updatePointsHUD(double deltaPoints, std::uint64_t windowFrames) {
+    if (!m_level || !m_pointsHud || m_pointsHud->getParent() != m_level) return;
+
+    const int decimals = std::clamp(m_cfg.pointsDecimals, 1, 4);
+    constexpr float kCardWidth = 132.f;
+
+    if (hasChild(m_pointsHud, m_pointsValueLabel)) {
+        const auto ptsText = fmt::format("Pts: {:.{}f}", m_stats.totalPoints, decimals);
+        m_pointsValueLabel->stopAllActions();
+        m_pointsValueLabel->setString(ptsText.c_str());
+        m_pointsValueLabel->limitLabelWidth(kCardWidth - 16.f, 0.42f, 0.20f);
+        const float targetScale = m_pointsValueLabel->getScale();
+        if (deltaPoints > 0.0) {
+            m_pointsValueLabel->setColor({255, 255, 255});
+            m_pointsValueLabel->setScale(targetScale * 1.18f);
+            m_pointsValueLabel->runAction(CCSpawn::createWithTwoActions(
+                CCScaleTo::create(0.18f, targetScale),
+                CCTintTo::create(0.28f, 255, 232, 120)
+            ));
+        } else {
+            m_pointsValueLabel->setColor({255, 232, 120});
+        }
+    } else {
+        m_pointsValueLabel = nullptr;
+    }
+
+    if (hasChild(m_pointsHud, m_pointsLeftLabel)) {
+        const auto fpText = fmt::format("1F: {}", m_stats.attemptFramePerfects);
+        m_pointsLeftLabel->setString(fpText.c_str());
+        m_pointsLeftLabel->limitLabelWidth(54.f, 0.28f, 0.16f);
+    } else {
+        m_pointsLeftLabel = nullptr;
+    }
+
+    if (hasChild(m_pointsHud, m_pointsRightLabel)) {
+        m_pointsRightLabel->stopAllActions();
+        if (deltaPoints > 0.0) {
+            const auto deltaText = fmt::format("+{:.{}f}", deltaPoints, decimals);
+            const auto col = windowFrames > 0
+                ? toCCColor(core::colorForWindow(windowFrames, m_cfg))
+                : ccColor3B{160, 255, 160};
+            m_pointsRightLabel->setString(deltaText.c_str());
+            m_pointsRightLabel->limitLabelWidth(64.f, 0.28f, 0.16f);
+            m_pointsRightLabel->setColor(col);
+        } else {
+            const auto bestText = fmt::format("Best: {:.{}f}", m_stats.bestPoints, decimals);
+            m_pointsRightLabel->setString(bestText.c_str());
+            m_pointsRightLabel->limitLabelWidth(64.f, 0.28f, 0.16f);
+            m_pointsRightLabel->setColor({145, 225, 255});
+        }
+    } else {
+        m_pointsRightLabel = nullptr;
+    }
+}
+
+void ProbeController::recomputePointsAndStats() {
+    m_stats.totalPoints = 0.0;
+    m_stats.attemptMeasured = 0;
+    m_stats.attemptFramePerfects = 0;
+    m_stats.lastAddedPoints = 0.0;
+
+    for (const auto w : m_measuredWindows) {
+        if (w == 0) continue;
+        ++m_stats.attemptMeasured;
+        if (w == 1) ++m_stats.attemptFramePerfects;
+        m_stats.totalPoints += core::pointsForWindow(w, m_cfg);
+    }
+    if (m_stats.totalPoints > m_stats.bestPoints) {
+        m_stats.bestPoints = m_stats.totalPoints;
+    }
+    updatePointsHUD(0.0, 0);
 }
 
 CCPoint ProbeController::ringScreenPos(PlayLayer* layer, CCPoint objectPos) const {
@@ -440,16 +775,27 @@ CCNode* ProbeController::createRingMarkerNode(
 }
 
 void ProbeController::clearMarkers() {
-    for (auto const& entry : m_markers) {
-        if (entry.node && entry.node->getParent()) {
-            entry.node->removeFromParentAndCleanup(true);
-        }
+    auto* markerSentinel = m_markerSentinel;
+    m_markerSentinel = nullptr;
+    if (markerSentinel) {
+        markerSentinel->disarm();
     }
+
+    auto* markerLayer = m_markerLayer;
+    m_markerLayer = nullptr;
     m_markers.clear();
+
+    if (markerLayer && markerLayer->getParent()) {
+        markerLayer->removeFromParentAndCleanup(true);
+    }
 }
 
 void ProbeController::moveMarkers(PlayLayer* layer, float dt) {
     if (!layer || layer != m_level || !layer->m_objectLayer) return;
+    if (!m_markerLayer || m_markerLayer->getParent() != layer) {
+        m_markers.clear();
+        return;
+    }
 
     float baseScale = std::clamp(m_cfg.markerScale, 0.5f, 2.0f);
     if (m_cfg.scaleWithZoom) {
@@ -460,7 +806,7 @@ void ProbeController::moveMarkers(PlayLayer* layer, float dt) {
     const float fadeTotal = m_cfg.markerFadeSeconds;
 
     for (auto it = m_markers.begin(); it != m_markers.end();) {
-        if (!it->node) {
+        if (!hasChild(m_markerLayer, it->node)) {
             it = m_markers.erase(it);
             continue;
         }
@@ -468,9 +814,7 @@ void ProbeController::moveMarkers(PlayLayer* layer, float dt) {
         if (fadeTotal > 0.05f && !m_paused && dt > 0.f) {
             it->age += dt;
             if (it->age >= fadeTotal) {
-                if (it->node->getParent()) {
-                    it->node->removeFromParentAndCleanup(true);
-                }
+                it->node->removeFromParentAndCleanup(true);
                 it = m_markers.erase(it);
                 continue;
             }
@@ -480,11 +824,13 @@ void ProbeController::moveMarkers(PlayLayer* layer, float dt) {
                     1.f - (it->age - fadeStart) / std::max(0.01f, fadeTotal - fadeStart),
                     0.f, 1.f
                 );
-                drawRingCircles(
-                    it->ring, it->color, it->radius, it->border,
-                    it->isRelease, it->distinguishRelease, alpha
-                );
-                if (it->label) {
+                if (hasChild(it->node, it->ring)) {
+                    drawRingCircles(
+                        it->ring, it->color, it->radius, it->border,
+                        it->isRelease, it->distinguishRelease, alpha
+                    );
+                }
+                if (hasChild(it->node, it->label)) {
                     it->label->setOpacity(static_cast<GLubyte>(alpha * 255.f));
                 }
             }
@@ -505,11 +851,13 @@ void ProbeController::attachMarker(
     bool overLimit,
     bool withSound
 ) {
-    if (!layer || !layer->m_objectLayer) return;
+    if (!layer || layer != m_level || !layer->m_objectLayer) return;
 
     ++m_stats.totalMeasured;
+    ++m_stats.attemptMeasured;
     if (windowFrames == 1 && !overLimit) {
         ++m_stats.framePerfects;
+        ++m_stats.attemptFramePerfects;
     }
     m_stats.lastWindowFrames = windowFrames;
     m_stats.lastWasRelease = isRelease;
@@ -517,6 +865,13 @@ void ProbeController::attachMarker(
 
     if (!overLimit && windowFrames >= 1) {
         m_measuredWindows.push_back(windowFrames);
+        const double pts = core::pointsForWindow(windowFrames, m_cfg);
+        m_stats.totalPoints += pts;
+        m_stats.lastAddedPoints = pts;
+        if (m_stats.totalPoints > m_stats.bestPoints) {
+            m_stats.bestPoints = m_stats.totalPoints;
+        }
+        updatePointsHUD(pts, windowFrames);
     }
 
     pulseHUD(windowFrames, isRelease, overLimit);
@@ -526,12 +881,25 @@ void ProbeController::attachMarker(
 
     if (!m_cfg.showRings || (windowFrames == 0 && !overLimit)) return;
 
+    if (!m_markerLayer || m_markerLayer->getParent() != layer) {
+        clearMarkers();
+        auto* markerLayer = CCNode::create();
+        if (!markerLayer) return;
+        markerLayer->setID("markers-layer"_spr);
+        m_markerSentinel = CleanupSentinel::create(SentinelKind::MarkerLayer, markerLayer);
+        if (m_markerSentinel) {
+            markerLayer->addChild(m_markerSentinel, -999999);
+        }
+        layer->addChild(markerLayer, 1000000);
+        m_markerLayer = markerLayer;
+    }
+
     CCDrawNode* ring = nullptr;
     CCLabelBMFont* label = nullptr;
     auto* marker = createRingMarkerNode(windowFrames, isRelease, overLimit, ring, label);
     if (!marker) return;
 
-    layer->addChild(marker, 1000000);
+    m_markerLayer->addChild(marker, 1);
     RingMarker item;
     item.node = marker;
     item.ring = ring;
@@ -543,10 +911,10 @@ void ProbeController::attachMarker(
     item.distinguishRelease = m_cfg.distinguishRelease;
     item.worldPosition = position;
     item.age = 0.f;
-    m_markers.push_back(std::move(item));
+    m_markers.push_back(item);
 
     while (m_markers.size() > kMaxVisibleMarkers) {
-        if (m_markers.front().node && m_markers.front().node->getParent()) {
+        if (hasChild(m_markerLayer, m_markers.front().node)) {
             m_markers.front().node->removeFromParentAndCleanup(true);
         }
         m_markers.pop_front();
@@ -561,8 +929,10 @@ void ProbeController::recordMeasurement(
     std::uint64_t releaseWindow,
     bool showPress,
     bool pressOver,
+    bool pressNandlIgnored,
     bool showRelease,
-    bool releaseOver
+    bool releaseOver,
+    bool releaseNandlIgnored
 ) {
     if (!layer || !layer->m_objectLayer) return;
 
@@ -580,14 +950,18 @@ void ProbeController::recordMeasurement(
             ? job.activationPos
             : job.pressPos;
         attachMarker(layer, pos, pressWindow, false, pressOver, !mergeSound);
-        recordNandlAndUpdate(pressFrameOf(job), pressWindow, false);
+    }
+    if ((showPress && !pressOver) || pressNandlIgnored) {
+        recordNandlAndUpdate(pressFrameOf(job), pressWindow, false, pressNandlIgnored);
     }
 
     if (showRelease) {
         const auto relFrame = releaseFrameOf(job);
         const auto releasePos = (relFrame != job.releaseFrame) ? job.activationPos : job.releasePos;
         attachMarker(layer, releasePos, releaseWindow, true, releaseOver, !mergeSound);
-        recordNandlAndUpdate(relFrame, releaseWindow, true);
+    }
+    if ((showRelease && !releaseOver) || releaseNandlIgnored) {
+        recordNandlAndUpdate(releaseFrameOf(job), releaseWindow, true, releaseNandlIgnored);
     }
 
     if (mergeSound && soundFrames > 0) {

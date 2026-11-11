@@ -80,10 +80,11 @@
         },
         "maximum-window-frames": {
             "name": "Maximum Window (Frames)",
-            "description": "Maximum survival window width (in 240Hz frames) measured around each input.",
+            "description": "Maximum survival window width (in 240Hz frames) measured around each input (10 matches NaNDL website).",
             "type": "string",
             "default": "12",
             "one-of": [
+                "10",
                 "12",
                 "17",
                 "30",
@@ -377,6 +378,49 @@
             "type": "bool",
             "default": true
         },
+        "show-points-hud": {
+            "name": "Show Total Points HUD (Right)",
+            "description": "Display a right-side UI showing cumulative decimal points earned from frame perfects and tight frame windows.",
+            "type": "bool",
+            "default": true
+        },
+        "points-corner": {
+            "name": "Points HUD Position",
+            "description": "Right-side screen position for the Total Points UI.",
+            "type": "string",
+            "default": "Top Right",
+            "one-of": [
+                "Top Right",
+                "Middle Right",
+                "Bottom Right"
+            ]
+        },
+        "points-formula": {
+            "name": "Points Formula",
+            "description": "How each measured frame window N converts into decimal points (default: 1F = 1.00, 2F = 0.50, 3F = 0.33, 4F = 0.25).",
+            "type": "string",
+            "default": "240Hz FP (1/N)",
+            "one-of": [
+                "240Hz FP (1/N)",
+                "60Hz FP (4/N)",
+                "120Hz FP (2/N)",
+                "Squared (1/N^2)",
+                "60Hz Align Odds"
+            ]
+        },
+        "points-decimals": {
+            "name": "Points Decimal Places",
+            "description": "Number of decimal digits displayed on the Total Points HUD.",
+            "type": "int",
+            "default": 2,
+            "min": 1,
+            "max": 4,
+            "control": {
+                "slider": true,
+                "slider-step": 1,
+                "arrows": true
+            }
+        },
         "show-precision-hud": {
             "name": "Show Live NaNDL Precision (L*)",
             "description": "Display live NaNDL sigma/s (L*) precision in the bottom-left corner.",
@@ -394,12 +438,70 @@
                 "Nerve",
                 "Fatigue",
                 "CPS",
-                "All Models"
+                "Nerve+Fatigue",
+                "Nerve+CPS",
+                "Fatigue+CPS",
+                "All 8 Models",
+                "Custom Toggles"
             ]
+        },
+        "nandl-show-base": {
+            "name": "Custom HUD: Base L*",
+            "description": "Show Base model L* when NaNDL Precision Model is set to 'Custom Toggles'.",
+            "type": "bool",
+            "default": false
+        },
+        "nandl-show-nerve": {
+            "name": "Custom HUD: Nerve L*",
+            "description": "Show Nerve model L* when NaNDL Precision Model is set to 'Custom Toggles'.",
+            "type": "bool",
+            "default": false
+        },
+        "nandl-show-fatigue": {
+            "name": "Custom HUD: Fatigue L*",
+            "description": "Show Fatigue model L* when NaNDL Precision Model is set to 'Custom Toggles'.",
+            "type": "bool",
+            "default": false
+        },
+        "nandl-show-cps": {
+            "name": "Custom HUD: CPS L*",
+            "description": "Show CPS model L* when NaNDL Precision Model is set to 'Custom Toggles'.",
+            "type": "bool",
+            "default": false
+        },
+        "nandl-show-nf": {
+            "name": "Custom HUD: Nerve+Fatigue L*",
+            "description": "Show Nerve+Fatigue model L* when NaNDL Precision Model is set to 'Custom Toggles'.",
+            "type": "bool",
+            "default": false
+        },
+        "nandl-show-nc": {
+            "name": "Custom HUD: Nerve+CPS L*",
+            "description": "Show Nerve+CPS model L* when NaNDL Precision Model is set to 'Custom Toggles'.",
+            "type": "bool",
+            "default": false
+        },
+        "nandl-show-fc": {
+            "name": "Custom HUD: Fatigue+CPS L*",
+            "description": "Show Fatigue+CPS model L* when NaNDL Precision Model is set to 'Custom Toggles'.",
+            "type": "bool",
+            "default": false
+        },
+        "nandl-show-nfc": {
+            "name": "Custom HUD: NFC (Full) L*",
+            "description": "Show full Nerve+Fatigue+CPS L* when NaNDL Precision Model is set to 'Custom Toggles'.",
+            "type": "bool",
+            "default": true
         },
         "show-pass-prob": {
             "name": "Show Pass Probability P(C)",
             "description": "Also show estimated clear probability at the solved L* inside the precision HUD.",
+            "type": "bool",
+            "default": false
+        },
+        "show-expected-time": {
+            "name": "Show Expected Attempt Time E[Ta]",
+            "description": "Show expected attempt survival time E[Ta] alongside L* inside the precision HUD.",
             "type": "bool",
             "default": false
         },

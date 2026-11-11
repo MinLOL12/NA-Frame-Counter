@@ -57,13 +57,42 @@ enum class HudCorner : int {
     BottomRight = 2,
 };
 
+enum class PointsCorner : int {
+    TopRight = 0,
+    MiddleRight = 1,
+    BottomRight = 2,
+};
+
+enum class PointsFormula : int {
+    FP240Inverse = 0,
+    FP60Equivalent = 1,
+    FP120Equivalent = 2,
+    Squared240 = 3,
+    Align60Hz = 4,
+};
+
 enum class NandlDisplayMode : int {
     NFC = 0,
     Base = 1,
     Nerve = 2,
     Fatigue = 3,
     CPS = 4,
-    AllModels = 5,
+    NerveFatigue = 5,
+    NerveCPS = 6,
+    FatigueCPS = 7,
+    AllModels = 8,
+    Custom = 9,
+};
+
+struct NandlVisibility {
+    bool base = false;
+    bool nerve = false;
+    bool fatigue = false;
+    bool cps = false;
+    bool nerveFatigue = false;
+    bool nerveCps = false;
+    bool fatigueCps = false;
+    bool nfc = true;
 };
 
 struct ModSettingsSnapshot {
@@ -107,9 +136,15 @@ struct ModSettingsSnapshot {
     HudCorner hudCorner = HudCorner::TopLeft;
     bool oneAtBottom = true;
     bool showLastBadge = true;
+    bool showPointsHud = true;
+    PointsCorner pointsCorner = PointsCorner::TopRight;
+    PointsFormula pointsFormula = PointsFormula::FP240Inverse;
+    int pointsDecimals = 2;
     bool showPrecisionHud = true;
     NandlDisplayMode nandlDisplay = NandlDisplayMode::NFC;
+    NandlVisibility nandlCustom;
     bool showPassProb = false;
+    bool showExpectedTime = false;
     math::NandlParams nandlParams;
 };
 
@@ -119,6 +154,8 @@ ColorPreset parseColorPreset(std::string_view value);
 SoundStyle parseSoundStyle(std::string_view value);
 PitchCurve parsePitchCurve(std::string_view value);
 HudCorner parseHudCorner(std::string_view value);
+PointsCorner parsePointsCorner(std::string_view value);
+PointsFormula parsePointsFormula(std::string_view value);
 NandlDisplayMode parseNandlDisplayMode(std::string_view value);
 
 char const* soundAssetFilename(SoundStyle style);
@@ -126,6 +163,7 @@ char const* soundAssetFilename(SoundStyle style);
 std::vector<WindowBand> bandsForMax(int maxFrames, bool oneAtBottom = true);
 RGBColor colorForWindow(std::uint64_t frames, ModSettingsSnapshot const& cfg);
 float pitchForWindow(std::uint64_t frames, ModSettingsSnapshot const& cfg);
+double pointsForWindow(std::uint64_t frames, ModSettingsSnapshot const& cfg);
 std::string formatMarkerText(std::uint64_t frames, bool isRelease, bool overLimit, int maxWindow, bool distinguishRelease);
 
 }

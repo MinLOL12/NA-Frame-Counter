@@ -75,23 +75,32 @@ PlayerObject* ProbeController::createProbePlayer(PlayLayer* layer) {
 }
 
 void ProbeController::clearHistory() {
+    auto resetSlot = [](HistorySlot& slot) {
+        if (slot.state) slot.state->release();
+        slot.state = nullptr;
+        slot.frame = -1;
+        slot.held = {};
+        slot.totalTime = 0.0;
+        slot.touchingRings.clear();
+        slot.touchedRings.clear();
+        slot.ringRelatedSet.clear();
+        slot.touchedRing = false;
+        slot.touchedCustomRing = false;
+        slot.stateRingJump = false;
+        slot.stateRingJump2 = false;
+        slot.ringJumpRelated = false;
+        slot.preInput = false;
+        slot.controlsDisabled = false;
+        slot.valid = false;
+    };
+
     for (auto& playerHistory : m_history) {
         for (auto& slot : playerHistory) {
-            if (slot.state) slot.state->release();
-            slot.state = nullptr;
-            slot.frame = -1;
-            slot.held = {};
-            slot.totalTime = 0.0;
-            slot.touchingRings.clear();
-            slot.touchedRings.clear();
-            slot.ringRelatedSet.clear();
-            slot.touchedRing = false;
-            slot.touchedCustomRing = false;
-            slot.stateRingJump = false;
-            slot.stateRingJump2 = false;
-            slot.ringJumpRelated = false;
-            slot.valid = false;
+            resetSlot(slot);
         }
+    }
+    for (auto& preSlot : m_preStartSlot) {
+        resetSlot(preSlot);
     }
     m_lastHistFrame = {-1, -1};
 }
@@ -141,26 +150,19 @@ void ProbeController::setupProbe(PlayLayer* layer) {
     m_probeP2 = createProbePlayer(layer);
 
     m_lastHistFrame = {-1, -1};
-    if (layer->m_player1) saveHistory(layer, layer->m_player1);
-    if (layer->m_player2) saveHistory(layer, layer->m_player2);
+    const auto startF = rawFrame(layer);
+    if (layer->m_player1) captureSlot(layer, layer->m_player1, m_preStartSlot[0], startF, true);
+    if (layer->m_player2) captureSlot(layer, layer->m_player2, m_preStartSlot[1], startF, true);
 }
 
-void ProbeController::saveHistory(PlayLayer* layer, PlayerObject* player) {
-    if (!layer || layer != m_level || !player || m_probing || !m_started ||
-        m_platformer || !m_cfg.enabled || m_attemptDone || m_levelDone) {
-        return;
-    }
-    if (!m_probeLayer) return;
-
-    int index = -1;
-    if (player == layer->m_player1) index = 0;
-    else if (player == layer->m_player2) index = 1;
-    else return;
-
-    const auto f = rawFrame(layer);
-    if (m_lastHistFrame[index] == f) return;
-
-    auto& slot = m_history[index][static_cast<std::size_t>(f % kHistSize)];
+void ProbeController::captureSlot(
+    PlayLayer* layer,
+    PlayerObject* player,
+    HistorySlot& slot,
+    std::int64_t f,
+    bool preInput
+) {
+    if (!layer || !player) return;
     if (!slot.state) {
         slot.state = PlayerCheckpoint::create();
         if (slot.state) slot.state->retain();
@@ -170,6 +172,8 @@ void ProbeController::saveHistory(PlayLayer* layer, PlayerObject* player) {
     player->saveToCheckpoint(slot.state);
     slot.frame = f;
     slot.totalTime = player->m_totalTime;
+    slot.preInput = preInput;
+    slot.controlsDisabled = player->m_controlsDisabled;
     slot.valid = true;
     for (int btn = static_cast<int>(PlayerButton::Jump);
          btn <= static_cast<int>(PlayerButton::Right); ++btn) {
@@ -194,13 +198,35 @@ void ProbeController::saveHistory(PlayLayer* layer, PlayerObject* player) {
     slot.stateRingJump = player->m_stateRingJump;
     slot.stateRingJump2 = player->m_stateRingJump2;
     slot.ringJumpRelated = player->m_ringJumpRelated;
+}
 
+void ProbeController::saveHistory(PlayLayer* layer, PlayerObject* player) {
+    if (!layer || layer != m_level || !player || m_probing || !m_started ||
+        m_platformer || !m_cfg.enabled || m_attemptDone || m_levelDone) {
+        return;
+    }
+    if (!m_probeLayer) return;
+
+    int index = -1;
+    if (player == layer->m_player1) index = 0;
+    else if (player == layer->m_player2) index = 1;
+    else return;
+
+    const auto f = rawFrame(layer);
+    if (m_lastHistFrame[index] == f) return;
+
+    auto& slot = m_history[index][static_cast<std::size_t>(f % kHistSize)];
+    captureSlot(layer, player, slot, f, false);
     m_lastHistFrame[index] = f;
 }
 
-HistorySlot const* ProbeController::findHistory(bool player1, std::int64_t desiredFrame) const {
-    if (desiredFrame < m_attemptStartFrame) desiredFrame = m_attemptStartFrame;
+HistorySlot const* ProbeController::findHistory(bool player1, std::int64_t desiredFrame, bool needPreInput) const {
     const int index = player1 ? 0 : 1;
+    if (needPreInput && m_preStartSlot[index].valid && m_preStartSlot[index].state) {
+        return &m_preStartSlot[index];
+    }
+
+    if (desiredFrame < m_attemptStartFrame) desiredFrame = m_attemptStartFrame;
     const auto span = std::max<std::int64_t>(0, desiredFrame - m_attemptStartFrame);
     const auto maxBack = std::min<std::int64_t>(span, static_cast<std::int64_t>(kHistSize - 1));
     for (std::int64_t back = 0; back <= maxBack; ++back) {
@@ -209,6 +235,9 @@ HistorySlot const* ProbeController::findHistory(bool player1, std::int64_t desir
         if (slot.valid && slot.frame == f && slot.state) {
             return &slot;
         }
+    }
+    if (desiredFrame == m_attemptStartFrame && m_preStartSlot[index].valid && m_preStartSlot[index].state) {
+        return &m_preStartSlot[index];
     }
     return nullptr;
 }
@@ -224,14 +253,35 @@ bool ProbeController::probeReady(PlayerObject* player) const {
     return grounded && std::abs(player->getYVelocity()) < 0.05;
 }
 
-void ProbeController::probeInput(PlayerObject* probe, InputEvent const& event, bool pressEvent) {
+void ProbeController::probeInput(
+    PlayerObject* probe,
+    InputEvent const& event,
+    bool pressEvent,
+    bool forceEnableControls,
+    bool forceDisableAfter
+) {
     if (!probe) return;
+    if (event.holdOnly) {
+        probe->m_holdingButtons[static_cast<int>(event.button)] = event.down;
+        return;
+    }
+
+    if (forceEnableControls) {
+        probe->m_controlsDisabled = false;
+        probe->m_isLocked = false;
+    }
+
     if (pressEvent) m_probeDown = true;
     m_replayingInput = true;
     if (event.down) probe->pushButton(event.button);
     else probe->releaseButton(event.button);
     m_replayingInput = false;
-    if (pressEvent && !m_probeJumped && (isFlight(probe) || isUfo(probe))) {
+
+    if (forceDisableAfter) {
+        probe->m_controlsDisabled = true;
+    }
+
+    if (pressEvent && !m_probeJumped && (isFlight(probe) || isUfo(probe) || probe->m_isDashing)) {
         m_probeJumped = true;
         m_probeJumpAt = m_probeAt;
         m_probeRingJump = false;
@@ -260,7 +310,12 @@ PathState ProbeController::runPath(
     std::int64_t targetPress = pressAt;
     std::int64_t targetRelease = releaseAt;
 
-    if (!removeTarget) {
+    if (removeTarget) {
+        if (axis == ScanAxis::Release) {
+            if (releaseAt < pressAt) return result;
+            targetRelease = -1; // Simulate holding without releasing at releaseAt
+        }
+    } else {
         if (axis == ScanAxis::Release) {
             if (releaseAt < pressAt) return result;
             targetRelease = releaseAt + offset;
@@ -278,18 +333,23 @@ PathState ProbeController::runPath(
         }
     }
 
-    result.targetPressAt = removeTarget ? -1 : targetPress;
+    result.targetPressAt = (removeTarget && axis == ScanAxis::Press) ? -1 : targetPress;
     result.targetReleaseAt = removeTarget ? -1 : targetRelease;
 
     std::int64_t earliest = pressAt;
-    if (axis == ScanAxis::Release && !removeTarget && releaseAt >= pressAt) {
-        earliest = std::min(releaseAt, targetRelease);
+    if (axis == ScanAxis::Release && releaseAt >= pressAt) {
+        earliest = removeTarget ? releaseAt : std::min(releaseAt, targetRelease);
     } else if (!removeTarget) {
         earliest = std::min(earliest, targetPress);
     }
+
+    const bool needPreInput = (earliest <= m_attemptStartFrame) &&
+        !(axis == ScanAxis::Release && job.activated && job.activationFrame > m_attemptStartFrame);
     const auto desiredSource = std::max<std::int64_t>(m_attemptStartFrame, earliest - 1);
-    auto const* source = findHistory(job.player1, desiredSource);
+    auto const* source = findHistory(job.player1, desiredSource, needPreInput);
     if (!source || !source->state) return result;
+
+    const bool usePreInput = source->preInput && (source->frame == m_attemptStartFrame);
 
     const bool oldDebugDraw = layer->m_isDebugDrawEnabled;
     const bool oldHitboxOff = layer->m_disablePlayerHitbox;
@@ -335,13 +395,15 @@ PathState ProbeController::runPath(
     probe->loadFromCheckpoint(source->state);
     syncMode(probe, source->state);
     probe->m_totalTime = source->totalTime;
+    probe->m_controlsDisabled = source->controlsDisabled;
     for (int btn = static_cast<int>(PlayerButton::Jump);
          btn <= static_cast<int>(PlayerButton::Right); ++btn) {
         probe->m_holdingButtons[btn] = source->held[btn];
     }
 
     const bool alreadyActive = (axis == ScanAxis::Release) &&
-        job.activated && job.activationFrame >= 0 && source->frame >= job.activationFrame;
+        job.activated && job.activationFrame >= 0 &&
+        !usePreInput && source->frame >= job.activationFrame;
     if (bufferedRing && !alreadyActive) {
         probe->m_holdingButtons[static_cast<int>(PlayerButton::Jump)] = false;
         probe->m_jumpBuffered = false;
@@ -349,9 +411,11 @@ PathState ProbeController::runPath(
     }
 
     const bool holdWave = (axis == ScanAxis::Release) &&
-        !removeTarget && targetRelease >= 0 && probe->m_isDart;
+        probe->m_isDart &&
+        ((!removeTarget && targetRelease >= 0 && alreadyActive) || removeTarget);
     if (holdWave) {
         m_replayingInput = true;
+        probe->m_controlsDisabled = false;
         probe->m_holdingButtons[static_cast<int>(PlayerButton::Jump)] = false;
         probe->pushButton(PlayerButton::Jump);
         m_replayingInput = false;
@@ -403,6 +467,9 @@ PathState ProbeController::runPath(
         cutoffOrder = job.releaseOrder;
     }
 
+    const bool removePressOnly = removeTarget && (axis == ScanAxis::Press);
+    const bool removeReleaseOnly = removeTarget;
+
     for (auto event : m_events) {
         if (event.order > cutoffOrder) continue;
         if (event.player2 == job.player1) continue;
@@ -410,26 +477,47 @@ PathState ProbeController::runPath(
         const bool isRelease = (job.releaseOrder != kNoOrder && event.order == job.releaseOrder);
         const bool moveRelease = isRelease && !isPress;
 
-        if (isPress && removeTarget) continue;
-        if (moveRelease && (removeTarget || cubePress || (axis == ScanAxis::Press && !job.keepHold))) continue;
+        if (isPress && removePressOnly) continue;
+        if (moveRelease && (removeReleaseOnly || cubePress || (axis == ScanAxis::Press && !job.keepHold))) continue;
         if (isPress) event.frame = targetPress;
         if (moveRelease) event.frame = targetRelease;
-        if (event.frame > source->frame) playback.push_back(event);
+        if (usePreInput ? (event.frame >= source->frame) : (event.frame > source->frame)) {
+            playback.push_back(event);
+        }
     }
 
-    if (cubePress && !removeTarget && targetRelease >= 0) {
+    if (cubePress && !removePressOnly && targetRelease >= 0) {
         InputEvent fakeRelease;
         fakeRelease.frame = targetRelease;
         fakeRelease.button = static_cast<PlayerButton>(job.button);
         fakeRelease.down = false;
         fakeRelease.player2 = !job.player1;
         fakeRelease.order = job.pressOrder + 1;
-        if (fakeRelease.frame > source->frame) playback.push_back(fakeRelease);
+        if (usePreInput ? (fakeRelease.frame >= source->frame) : (fakeRelease.frame > source->frame)) {
+            playback.push_back(fakeRelease);
+        }
     }
     sortInputs(playback);
 
+    m_probeControlEvents.clear();
+    auto& controlPlayback = m_probeControlEvents;
+    for (auto const& ce : m_controlEvents) {
+        if (ce.order > cutoffOrder) continue;
+        if (ce.player1 != job.player1) continue;
+        if (job.pressControlOrder != kNoOrder && ce.order == job.pressControlOrder) continue;
+        const bool isJobReleaseCtrl = (job.releaseControlOrder != kNoOrder && ce.order == job.releaseControlOrder);
+        if (isJobReleaseCtrl &&
+            (removeTarget || cubePress || axis == ScanAxis::Release || job.fromControlEnable)) {
+            continue;
+        }
+        if (usePreInput ? (ce.frame >= source->frame) : (ce.frame > source->frame)) {
+            controlPlayback.push_back(ce);
+        }
+    }
+
     std::size_t playbackIndex = 0;
-    std::int64_t now = source->frame;
+    std::size_t controlIndex = 0;
+    std::int64_t now = usePreInput ? (source->frame - 1) : source->frame;
     const auto groundEnd = cubePress ? kCubeLimit : kGroundMax;
     const auto jumpDeadline =
         std::max(targetPress, targetRelease >= 0 ? targetRelease : targetPress) + groundEnd;
@@ -459,14 +547,41 @@ PathState ProbeController::runPath(
         ++now;
         m_probeAt = now;
 
-        if (holdWave && now < targetRelease) {
+        if (holdWave && ((removeTarget && axis == ScanAxis::Release) || now < targetRelease)) {
             probe->m_holdingButtons[static_cast<int>(PlayerButton::Jump)] = true;
         }
 
-        while (playbackIndex < playback.size() && playback[playbackIndex].frame <= now) {
-            auto const& event = playback[playbackIndex];
-            probeInput(probe, event, event.order == job.pressOrder);
-            ++playbackIndex;
+        // Apply interleaved ControlEvents and InputEvents in exact chronological (frame, order) order
+        while (true) {
+            const bool hasInput = (playbackIndex < playback.size() && playback[playbackIndex].frame <= now);
+            const bool hasCtrl = (controlIndex < controlPlayback.size() && controlPlayback[controlIndex].frame <= now);
+            if (!hasInput && !hasCtrl) break;
+
+            bool runCtrlNext = false;
+            if (hasCtrl && !hasInput) {
+                runCtrlNext = true;
+            } else if (hasCtrl && hasInput) {
+                auto const& ev = playback[playbackIndex];
+                auto const& ce = controlPlayback[controlIndex];
+                if (ce.frame < ev.frame || (ce.frame == ev.frame && ce.order < ev.order)) {
+                    runCtrlNext = true;
+                }
+            }
+
+            if (runCtrlNext) {
+                auto const& ce = controlPlayback[controlIndex++];
+                probe->m_controlsDisabled = ce.disabled;
+            } else {
+                auto const& event = playback[playbackIndex++];
+                const bool isTargetPress = (event.order == job.pressOrder);
+                const bool isTargetRelease = (job.releaseOrder != kNoOrder && event.order == job.releaseOrder);
+                const bool forceEnable =
+                    (isTargetPress && job.fromControlEnable) ||
+                    (isTargetRelease && (job.fromControlEnable || job.fromControlDisable));
+                const bool forceDisableAfter =
+                    isTargetRelease && job.fromControlDisable && !cubePress;
+                probeInput(probe, event, isTargetPress, forceEnable, forceDisableAfter);
+            }
         }
 
         probe->resetTouchedRings(false);
@@ -862,35 +977,54 @@ bool ProbeController::scanClick(PlayLayer* layer, ClickJob& job) {
 
     if (measurePress && wantPress && !skipped) {
         scanRoute(layer, job, baseline, ScanAxis::Press, pressWindow, pressOver);
-        if (pressOver && m_cfg.showOverLimit && !checkedNoJump) {
-            auto noJump = runPath(layer, job, ScanAxis::Press, 0, true, baseline.resolveFrame);
+        if (pressOver && !checkedNoJump && (m_cfg.showOverLimit || m_cfg.showPrecisionHud)) {
+            const auto compareFrames = std::max<std::int64_t>(1, baseline.resolveFrame - basePress);
+            const auto extra = std::max(kPadding, compareFrames);
+            auto noJump = runPath(layer, job, ScanAxis::Press, 0, true, baseline.resolveFrame + extra);
             noJumpDied = noJump.died;
             checkedNoJump = true;
         }
     }
 
+    bool checkedNoRelease = false;
+    bool noReleaseDied = false;
     if (measureRelease && !ignoreRelease) {
         scanRoute(layer, job, baseline, ScanAxis::Release, releaseWindow, releaseOver);
+        if (releaseOver && (m_cfg.showOverLimit || m_cfg.showPrecisionHud)) {
+            const auto baseRel = releaseFrameOf(job);
+            const auto compareFrames = std::max<std::int64_t>(1, baseline.resolveFrame - baseRel);
+            const auto extra = std::max(kPadding, compareFrames);
+            auto noRel = runPath(layer, job, ScanAxis::Release, 0, true, baseline.resolveFrame + extra);
+            checkedNoRelease = true;
+            noReleaseDied = noRel.died;
+        }
     }
 
     const int maxWin = std::clamp(m_cfg.maxWindowFrames, 1, 240);
-    const bool showPressOver = pressOver && m_cfg.showOverLimit &&
-        (!m_cfg.ignoreHarmlessClicks || !checkedNoJump || noJumpDied);
+    const bool pressIsRequired = (!m_cfg.ignoreHarmlessClicks || !checkedNoJump || noJumpDied);
+    const bool showPressOver = pressOver && m_cfg.showOverLimit && pressIsRequired;
+    const bool pressNandlIgnored = measurePress && wantPress && !skipped && pressOver && pressIsRequired;
 
     const bool showPress = measurePress && wantPress && !skipped &&
         ((!pressOver && pressWindow >= 1 && static_cast<int>(pressWindow) <= maxWin) || showPressOver);
-    const bool showRelease = measureRelease && !ignoreRelease &&
+
+    const bool releaseNumeric = measureRelease && !ignoreRelease &&
         !releaseOver && releaseWindow >= 1 && static_cast<int>(releaseWindow) <= maxWin;
+    const bool releaseNecessaryOver = measureRelease && !ignoreRelease &&
+        releaseOver && checkedNoRelease && noReleaseDied;
+    const bool showReleaseOver = releaseNecessaryOver && m_cfg.showOverLimit;
+    const bool showRelease = releaseNumeric || showReleaseOver;
+    const bool releaseNandlIgnored = releaseNecessaryOver;
 
     if (measurePress) job.pressDone = true;
     if (measureRelease) job.releaseDone = true;
 
-    if (showPress || showRelease) {
+    if (showPress || showRelease || pressNandlIgnored || releaseNandlIgnored) {
         recordMeasurement(
             layer, job,
             pressWindow, releaseWindow,
-            showPress, showPressOver,
-            showRelease, false
+            showPress, showPressOver, pressNandlIgnored,
+            showRelease, showReleaseOver, releaseNandlIgnored
         );
     }
     return true;
@@ -900,10 +1034,17 @@ void ProbeController::scanClicks(PlayLayer* layer) {
     if (m_probing || m_platformer || m_resetting || !m_cfg.enabled) return;
 
     const auto startTime = std::chrono::steady_clock::now();
+    const auto nowFrame = rawFrame(layer);
     int jobsScanned = 0;
 
     for (auto& job : m_clicks) {
         if (!job.canScan || !job.activated) continue;
+
+        if (!job.pressDone && job.releaseFrame < 0 &&
+            nowFrame >= pressFrameOf(job) + kLongHoldMeasureFrames) {
+            job.keepHold = false;
+            job.tryHolding = false;
+        }
 
         const bool canRelease = (releaseFrameOf(job) >= pressFrameOf(job)) &&
             (job.releaseOrder != kNoOrder);

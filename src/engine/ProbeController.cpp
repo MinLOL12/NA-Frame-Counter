@@ -10,19 +10,171 @@ using namespace cocos2d;
 
 namespace na_frame_counter::engine {
 
+namespace {
+bool s_controllerAlive = false;
+} // namespace
+
+CleanupSentinel* CleanupSentinel::create(SentinelKind kind, void* expected) {
+    auto* ret = new CleanupSentinel();
+    if (ret && ret->init()) {
+        ret->m_kind = kind;
+        ret->m_expected = expected;
+        ret->setVisible(false);
+        ret->autorelease();
+        return ret;
+    }
+    CC_SAFE_DELETE(ret);
+    return nullptr;
+}
+
+CleanupSentinel::~CleanupSentinel() {
+    if (m_armed && s_controllerAlive) {
+        ProbeController::get().onSentinelDestroyed(m_kind, m_expected);
+    }
+}
+
+ProbeController::ProbeController() {
+    s_controllerAlive = true;
+}
+
+ProbeController::~ProbeController() {
+    s_controllerAlive = false;
+}
+
 void ProbeController::onSettingsChanged() {
+    if (m_suppressSettingsChanged) return;
     m_cfg = core::SettingsBridge::read();
     audio::SoundPlayer::get().preload(m_cfg);
 
     if (m_level && !m_levelDone) {
-        if (!m_cfg.enabled) {
+        if (!m_cfg.enabled || m_platformer) {
             clearHUD();
             clearPrecisionHUD();
+            clearPointsHUD();
             clearMarkers();
         } else {
+            if (!m_nandlInputs.empty()) {
+                m_nandlSummary = math::NandlCalculator::solveAll(
+                    m_nandlInputs,
+                    m_cfg.nandlParams,
+                    m_hasNandlSummary ? &m_nandlSummary : nullptr
+                );
+                m_hasNandlSummary = true;
+                m_stats.currentLStar = m_nandlSummary.nfc.lStar;
+                if (m_stats.currentLStar > m_stats.bestLStar) {
+                    m_stats.bestLStar = m_stats.currentLStar;
+                }
+            }
+            recomputePointsAndStats();
             buildHUD();
             buildPrecisionHUD();
+            buildPointsHUD();
         }
+    }
+}
+
+void ProbeController::onSentinelDestroyed(SentinelKind kind, void* expected) {
+    switch (kind) {
+        case SentinelKind::Hud:
+            if (m_hud == expected) {
+                m_hudSentinel = nullptr;
+                m_hud = nullptr;
+                m_lastBadgeLabel = nullptr;
+                m_counters.clear();
+            }
+            break;
+        case SentinelKind::PrecHud:
+            if (m_precHud == expected) {
+                m_precHudSentinel = nullptr;
+                m_precHud = nullptr;
+            }
+            break;
+        case SentinelKind::PointsHud:
+            if (m_pointsHud == expected) {
+                m_pointsSentinel = nullptr;
+                m_pointsHud = nullptr;
+                m_pointsValueLabel = nullptr;
+                m_pointsLeftLabel = nullptr;
+                m_pointsRightLabel = nullptr;
+            }
+            break;
+        case SentinelKind::MarkerLayer:
+            if (m_markerLayer == expected) {
+                m_markerSentinel = nullptr;
+                m_markerLayer = nullptr;
+                m_markers.clear();
+            }
+            break;
+        case SentinelKind::Level:
+            if (m_level == expected) {
+                m_levelSentinel = nullptr;
+                m_hudSentinel = nullptr;
+                m_precHudSentinel = nullptr;
+                m_pointsSentinel = nullptr;
+                m_markerSentinel = nullptr;
+
+                m_hud = nullptr;
+                m_lastBadgeLabel = nullptr;
+                m_precHud = nullptr;
+                m_pointsHud = nullptr;
+                m_pointsValueLabel = nullptr;
+                m_pointsLeftLabel = nullptr;
+                m_pointsRightLabel = nullptr;
+                m_markerLayer = nullptr;
+                m_counters.clear();
+                m_markers.clear();
+
+                m_probeLayer = nullptr;
+                m_probeP1 = nullptr;
+                m_probeP2 = nullptr;
+                m_probePlayer = nullptr;
+                m_probeG1 = nullptr;
+                m_probeG2 = nullptr;
+                m_ground1 = nullptr;
+                m_ground2 = nullptr;
+                clearHistory();
+
+                m_probing = false;
+                m_replayingInput = false;
+                m_ring = nullptr;
+                m_portals.clear();
+                m_level = nullptr;
+                m_platformer = false;
+                m_levelDone = false;
+                m_resetting = false;
+                m_paused = false;
+                m_resetDepth = 0;
+
+                m_started = false;
+                m_clockReady = false;
+                m_attemptDone = false;
+                m_sendingJump = false;
+                m_jumpP1 = true;
+                m_pendingButtonLocked = false;
+                m_inControlEnablePlayer = nullptr;
+                m_inControlDisablePlayer = nullptr;
+                m_activeControlOrder = kNoOrder;
+                m_lastFrame = 0;
+                m_attemptStartFrame = 0;
+                m_orderCounter = 1;
+                m_jumpCount = 0;
+
+                m_events.clear();
+                m_controlEvents.clear();
+                m_clicks.clear();
+                m_jumps.clear();
+                m_measuredWindows.clear();
+                m_nandlInputs.clear();
+                m_nandlSummary = math::NandlSummary{};
+                m_hasNandlSummary = false;
+                m_stats.currentLStar = 0.0;
+                m_stats.lastWindowFrames = 0;
+                m_stats.attemptFramePerfects = 0;
+                m_stats.attemptMeasured = 0;
+                m_stats.totalPoints = 0.0;
+                m_stats.lastAddedPoints = 0.0;
+            }
+            break;
     }
 }
 
@@ -32,6 +184,12 @@ void ProbeController::startLevel(PlayLayer* layer) {
 
     m_cfg = core::SettingsBridge::read();
     m_level = layer;
+    m_levelSentinel = CleanupSentinel::create(SentinelKind::Level, layer);
+    if (m_levelSentinel) {
+        m_levelSentinel->setID("level-sentinel"_spr);
+        layer->addChild(m_levelSentinel, -999999);
+    }
+
     m_platformer = layer->m_level && layer->m_level->isPlatformer();
     m_stats = SessionStats{};
     m_stats.attempts = 1;
@@ -41,6 +199,7 @@ void ProbeController::startLevel(PlayLayer* layer) {
     if (m_cfg.enabled && !m_platformer) {
         buildHUD();
         buildPrecisionHUD();
+        buildPointsHUD();
     }
 }
 
@@ -50,12 +209,17 @@ void ProbeController::resetAttemptState() {
     m_attemptDone = false;
     m_sendingJump = false;
     m_jumpP1 = true;
+    m_pendingButtonLocked = false;
+    m_inControlEnablePlayer = nullptr;
+    m_inControlDisablePlayer = nullptr;
+    m_activeControlOrder = kNoOrder;
     m_lastFrame = 0;
     m_attemptStartFrame = 0;
     m_orderCounter = 1;
     m_jumpCount = 0;
 
     m_events.clear();
+    m_controlEvents.clear();
     m_clicks.clear();
     m_jumps.clear();
     m_measuredWindows.clear();
@@ -64,10 +228,15 @@ void ProbeController::resetAttemptState() {
     m_hasNandlSummary = false;
     m_stats.currentLStar = 0.0;
     m_stats.lastWindowFrames = 0;
+    m_stats.attemptFramePerfects = 0;
+    m_stats.attemptMeasured = 0;
+    m_stats.totalPoints = 0.0;
+    m_stats.lastAddedPoints = 0.0;
 
     clearMarkers();
     resetHUD();
     updatePrecisionHUD();
+    resetPointsHUD();
 }
 
 void ProbeController::resetAllState() {
@@ -80,6 +249,16 @@ void ProbeController::resetAllState() {
     clearMarkers();
     clearHUD();
     clearPrecisionHUD();
+    clearPointsHUD();
+
+    auto* levelSentinel = m_levelSentinel;
+    m_levelSentinel = nullptr;
+    if (levelSentinel) {
+        levelSentinel->disarm();
+        if (levelSentinel->getParent()) {
+            levelSentinel->removeFromParentAndCleanup(true);
+        }
+    }
 
     m_level = nullptr;
     m_platformer = false;
@@ -114,6 +293,10 @@ void ProbeController::beforeReset(PlayLayer* layer) {
     m_ring = nullptr;
     m_jumps.clear();
     m_sendingJump = false;
+    m_pendingButtonLocked = false;
+    m_inControlEnablePlayer = nullptr;
+    m_inControlDisablePlayer = nullptr;
+    m_activeControlOrder = kNoOrder;
     dropProbe();
 }
 
@@ -145,6 +328,18 @@ void ProbeController::handleDeath(PlayLayer* layer) {
 
 void ProbeController::completeLevel(PlayLayer* layer) {
     if (!layer || layer != m_level || m_levelDone) return;
+
+    if (!m_platformer && m_cfg.enabled && m_started && !m_attemptDone && m_probeLayer) {
+        for (auto& job : m_clicks) {
+            if (!job.canScan || !job.activated) continue;
+            if (!job.pressDone && job.releaseFrame < 0) {
+                job.keepHold = false;
+                job.tryHolding = false;
+            }
+            scanClick(layer, job);
+        }
+    }
+
     m_levelDone = true;
     m_attemptDone = true;
     m_probing = false;
@@ -154,9 +349,80 @@ void ProbeController::completeLevel(PlayLayer* layer) {
     m_ring = nullptr;
     m_jumps.clear();
     m_sendingJump = false;
+    m_pendingButtonLocked = false;
+    m_inControlEnablePlayer = nullptr;
+    m_inControlDisablePlayer = nullptr;
+    m_activeControlOrder = kNoOrder;
     m_clockReady = false;
     m_started = false;
     dropProbe();
+}
+
+void ProbeController::ensureStarted(PlayLayer* layer) {
+    if (!layer || m_started) return;
+    m_started = true;
+    startClock(layer);
+    setupProbe(layer);
+}
+
+void ProbeController::synthesizePreStartHold(PlayLayer* layer, PlayerObject* player, bool isPlayer1) {
+    if (!layer || !player || !m_started) return;
+    const int idx = isPlayer1 ? 0 : 1;
+    auto& pre = m_preStartSlot[idx];
+    if (pre.valid) {
+        pre.held[static_cast<int>(PlayerButton::Jump)] = false;
+        pre.stateRingJump = false;
+        if (pre.state) {
+            pre.state->m_jumpBuffered = false;
+            pre.state->m_wasJumpBuffered = false;
+        }
+    }
+
+    const auto atFrame = m_attemptStartFrame;
+    InputEvent event;
+    event.frame = atFrame;
+    event.button = PlayerButton::Jump;
+    event.down = true;
+    event.player2 = !isPlayer1;
+    event.order = m_orderCounter++;
+    m_events.push_back(event);
+
+    ClickJob job;
+    job.pressFrame = atFrame;
+    job.pressOrder = event.order;
+    job.button = static_cast<int>(PlayerButton::Jump);
+    job.player1 = isPlayer1;
+    job.canScan = true;
+    job.pressPos = player->getPosition();
+    job.keepHold = true;
+    job.synthesizedPreHold = true;
+    job.ignoreHit = player->m_isShip || player->m_isDart;
+    if (isFlight(player) || isUfo(player) || player->m_jumpBuffered || player->m_isDashing) {
+        confirmJump(job, atFrame, player->getPosition(), false, false, nullptr, false);
+    }
+    m_clicks.push_back(job);
+}
+
+void ProbeController::beforeUpdate(GJBaseGameLayer* base) {
+    if (!base || m_probing || !m_level) return;
+    if (static_cast<GJBaseGameLayer*>(m_level) != base) return;
+    if (!m_cfg.enabled || m_platformer || m_resetting || m_attemptDone || m_levelDone) return;
+
+    if (!m_started && m_level->m_player1 && m_level->isGameplayActive()) {
+        ensureStarted(m_level);
+
+        auto checkPreHold = [&](PlayerObject* player, bool isPlayer1) {
+            if (!player || player->m_controlsDisabled || player->m_isLocked) return;
+            auto it = player->m_holdingButtons.find(static_cast<int>(PlayerButton::Jump));
+            if (it != player->m_holdingButtons.end() && it->second) {
+                synthesizePreStartHold(m_level, player, isPlayer1);
+            }
+        };
+        checkPreHold(m_level->m_player1, true);
+        if (m_level->m_gameState.m_isDualMode && m_level->m_player2) {
+            checkPreHold(m_level->m_player2, false);
+        }
+    }
 }
 
 void ProbeController::afterTick(PlayLayer* layer, float dt) {
@@ -166,13 +432,13 @@ void ProbeController::afterTick(PlayLayer* layer, float dt) {
         moveMarkers(layer, dt);
         if (!m_hud && m_cfg.showCounters) buildHUD();
         if (!m_precHud && m_cfg.showPrecisionHud) buildPrecisionHUD();
+        if (!m_pointsHud && m_cfg.showPointsHud) buildPointsHUD();
     }
 
     if (m_levelDone || m_platformer || !m_cfg.enabled) return;
 
     if (!m_started && layer->m_player1 && layer->isGameplayActive()) {
-        m_started = true;
-        startClock(layer);
+        ensureStarted(layer);
     }
 
     if (m_started && !m_attemptDone && !m_probeLayer) {
@@ -184,6 +450,24 @@ void ProbeController::afterUpdate(GJBaseGameLayer* base) {
     if (!base || m_probing || !m_level) return;
     if (static_cast<GJBaseGameLayer*>(m_level) != base) return;
     if (!m_cfg.enabled || m_platformer || m_resetting || !m_started || m_attemptDone || m_levelDone) return;
+
+    // Fallback: if a pre-start hold existed without triggering pushButton on the first frame
+    if (rawFrame(m_level) == m_attemptStartFrame) {
+        auto checkOpenHold = [&](PlayerObject* player, bool isPlayer1) {
+            if (!player || player->m_controlsDisabled || player->m_isLocked) return;
+            auto itHold = player->m_holdingButtons.find(static_cast<int>(PlayerButton::Jump));
+            if (itHold == player->m_holdingButtons.end() || !itHold->second) return;
+            for (auto const& c : m_clicks) {
+                if (c.player1 == isPlayer1 && c.releaseFrame < 0) return;
+            }
+            synthesizePreStartHold(m_level, player, isPlayer1);
+        };
+        checkOpenHold(m_level->m_player1, true);
+        if (m_level->m_gameState.m_isDualMode && m_level->m_player2) {
+            checkOpenHold(m_level->m_player2, false);
+        }
+    }
+
     scanClicks(m_level);
 }
 
@@ -212,12 +496,52 @@ void ProbeController::pauseEnd(PlayLayer* layer) {
     }
 }
 
+void ProbeController::beforeControlToggle(PlayerObject* player, bool enable) {
+    if (!player || !m_level || m_replayingInput || m_probing || m_platformer || !m_cfg.enabled) return;
+    if (m_attemptDone || !m_started) return;
+
+    bool isPlayer1 = false;
+    if (player == m_level->m_player1) isPlayer1 = true;
+    else if (player == m_level->m_player2) isPlayer1 = false;
+    else return;
+
+    const auto atFrame = m_clockReady ? rawFrame(m_level) : m_lastFrame;
+    const auto order = m_orderCounter++;
+
+    ControlEvent ce;
+    ce.frame = atFrame;
+    ce.player1 = isPlayer1;
+    ce.disabled = !enable;
+    ce.order = order;
+    m_controlEvents.push_back(ce);
+
+    m_activeControlOrder = order;
+    if (enable) {
+        m_inControlEnablePlayer = player;
+    } else {
+        m_inControlDisablePlayer = player;
+    }
+}
+
+void ProbeController::afterControlToggle(PlayerObject* player, bool enable) {
+    if (enable && m_inControlEnablePlayer == player) {
+        m_inControlEnablePlayer = nullptr;
+    }
+    if (!enable && m_inControlDisablePlayer == player) {
+        m_inControlDisablePlayer = nullptr;
+    }
+    m_activeControlOrder = kNoOrder;
+}
+
 bool ProbeController::beforeButton(PlayerObject* player, PlayerButton button, bool down) {
+    m_pendingButtonLocked = false;
     if (!player || !m_level || m_replayingInput || m_platformer || !m_cfg.enabled) return true;
     if (player != m_level->m_player1 && player != m_level->m_player2) return true;
     if (m_attemptDone || !m_started) return true;
 
-    if (down && button == PlayerButton::Jump) {
+    m_pendingButtonLocked = (player->m_isLocked || player->m_controlsDisabled);
+
+    if (down && button == PlayerButton::Jump && !m_pendingButtonLocked) {
         m_sendingJump = true;
         m_jumpP1 = (player == m_level->m_player1);
     }
@@ -226,6 +550,8 @@ bool ProbeController::beforeButton(PlayerObject* player, PlayerButton button, bo
 
 void ProbeController::afterButton(PlayerObject* player, PlayerButton button, bool down, bool accepted) {
     m_sendingJump = false;
+    const bool lockedBeforeCall = m_pendingButtonLocked;
+    m_pendingButtonLocked = false;
 
     if (!player || !m_level || m_replayingInput || m_platformer || !m_cfg.enabled) return;
     if (m_attemptDone || !m_started) return;
@@ -239,7 +565,29 @@ void ProbeController::afterButton(PlayerObject* player, PlayerButton button, boo
         return;
     }
 
+    const bool fromEnable = down && (m_inControlEnablePlayer == player);
+    const bool fromDisable = !down && (m_inControlDisablePlayer == player);
+
+    // Ignore non-jump synthetic releaseButton(2/3/5) calls inside disablePlayerControls() in classic mode
+    if (fromDisable && button != PlayerButton::Jump && !m_platformer) {
+        return;
+    }
+
     const auto atFrame = m_clockReady ? rawFrame(m_level) : m_lastFrame;
+
+    // Physical button presses/releases while m_controlsDisabled/m_isLocked do not jump or release active holds,
+    // but we record holdOnly so probe->m_holdingButtons stays in sync if replayed across an enablePlayerControls().
+    if (lockedBeforeCall && !fromEnable && !fromDisable) {
+        InputEvent event;
+        event.frame = atFrame;
+        event.button = button;
+        event.down = down;
+        event.player2 = !isPlayer1;
+        event.order = m_orderCounter++;
+        event.holdOnly = true;
+        m_events.push_back(event);
+        return;
+    }
 
     InputEvent event;
     event.frame = atFrame;
@@ -247,9 +595,32 @@ void ProbeController::afterButton(PlayerObject* player, PlayerButton button, boo
     event.down = down;
     event.player2 = !isPlayer1;
     event.order = m_orderCounter++;
+    event.fromControl = fromEnable || fromDisable;
     m_events.push_back(event);
 
     if (button == PlayerButton::Jump && down) {
+        // If synthesizePreStartHold already opened a frame-0 hold and GD also called pushButton on frame 0,
+        // adopt the existing job cleanly rather than duplicating it.
+        if (atFrame == m_attemptStartFrame) {
+            for (auto it = m_clicks.rbegin(); it != m_clicks.rend(); ++it) {
+                if (it->player1 == isPlayer1 && it->synthesizedPreHold &&
+                    it->pressFrame == atFrame && it->releaseFrame < 0) {
+                    it->pressOrder = event.order;
+                    it->fromControlEnable = it->fromControlEnable || fromEnable;
+                    if (fromEnable && m_activeControlOrder != kNoOrder) {
+                        it->pressControlOrder = m_activeControlOrder;
+                    }
+                    it->synthesizedPreHold = false;
+                    applyJump(*it);
+                    if (!it->activated && (accepted || !lockedBeforeCall) &&
+                        (isFlight(player) || isUfo(player))) {
+                        confirmJump(*it, atFrame, player->getPosition(), false, false, nullptr, false);
+                    }
+                    return;
+                }
+            }
+        }
+
         ClickJob job;
         job.pressFrame = atFrame;
         job.pressOrder = event.order;
@@ -259,9 +630,12 @@ void ProbeController::afterButton(PlayerObject* player, PlayerButton button, boo
         job.pressPos = player->getPosition();
         job.keepHold = true;
         job.ignoreHit = player->m_isShip || player->m_isDart;
+        job.fromControlEnable = fromEnable;
+        job.pressControlOrder = fromEnable ? m_activeControlOrder : kNoOrder;
         applyJump(job);
 
-        if (!job.activated && accepted && (isFlight(player) || isUfo(player))) {
+        if (!job.activated && (accepted || !lockedBeforeCall) &&
+            (isFlight(player) || isUfo(player) || player->m_isDashing)) {
             confirmJump(job, atFrame, player->getPosition(), false, false, nullptr, false);
         }
 
@@ -274,6 +648,8 @@ void ProbeController::afterButton(PlayerObject* player, PlayerButton button, boo
             it->releaseOrder = event.order;
             it->releasePos = player->getPosition();
             it->ignoreHit = it->ignoreHit || player->m_isShip || player->m_isDart;
+            it->fromControlDisable = fromDisable;
+            it->releaseControlOrder = fromDisable ? m_activeControlOrder : kNoOrder;
             break;
         }
     }
@@ -306,7 +682,7 @@ void ProbeController::confirmJump(
     job.fromRing = fromRing;
     job.wasBuffered = wasBuffered || activationFrame > job.pressFrame;
     job.activationRing = ring;
-    job.tryHolding = tryHolding;
+    job.tryHolding = tryHolding && !job.fromControlEnable && !job.fromControlDisable;
     job.clickIndex = ++m_jumpCount;
 }
 

@@ -4,6 +4,26 @@
 
 namespace na_frame_counter::engine {
 
+enum class SentinelKind {
+    Level,
+    Hud,
+    PrecHud,
+    PointsHud,
+    MarkerLayer,
+};
+
+class CleanupSentinel final : public cocos2d::CCNode {
+public:
+    static CleanupSentinel* create(SentinelKind kind, void* expected);
+    void disarm() { m_armed = false; }
+    ~CleanupSentinel() override;
+
+private:
+    SentinelKind m_kind = SentinelKind::Level;
+    void* m_expected = nullptr;
+    bool m_armed = true;
+};
+
 class ProbeController {
 public:
     static ProbeController& get() {
@@ -12,7 +32,9 @@ public:
     }
 
     // Settings & Stats
+    void setSuppressSettingsChanged(bool suppress) { m_suppressSettingsChanged = suppress; }
     void onSettingsChanged();
+    void onSentinelDestroyed(SentinelKind kind, void* expected);
     core::ModSettingsSnapshot const& config() const { return m_cfg; }
     SessionStats const& stats() const { return m_stats; }
     bool isPlatformer() const { return m_platformer; }
@@ -24,6 +46,7 @@ public:
     void onReset(PlayLayer* layer);
     void handleDeath(PlayLayer* layer);
     void completeLevel(PlayLayer* layer);
+    void beforeUpdate(GJBaseGameLayer* base);
     void afterTick(PlayLayer* layer, float dt);
     void afterUpdate(GJBaseGameLayer* base);
     void onQuit(PlayLayer* layer);
@@ -34,6 +57,8 @@ public:
     // Input & Activation Recording
     bool beforeButton(PlayerObject* player, PlayerButton button, bool down);
     void afterButton(PlayerObject* player, PlayerButton button, bool down, bool accepted);
+    void beforeControlToggle(PlayerObject* player, bool enable);
+    void afterControlToggle(PlayerObject* player, bool enable);
     void onJumpActive(PlayerObject* player, RingObject* ring);
     void saveHistory(PlayLayer* layer, PlayerObject* player);
 
@@ -55,7 +80,8 @@ public:
     void probeDone();
 
 private:
-    ProbeController() = default;
+    ProbeController();
+    ~ProbeController();
 
     // Frame timing & mode helpers
     std::int64_t rawFrame(PlayLayer* layer) const;
@@ -91,9 +117,12 @@ private:
     void setupProbe(PlayLayer* layer);
     void dropProbe();
     void clearHistory();
-    HistorySlot const* findHistory(bool player1, std::int64_t desiredFrame) const;
+    void ensureStarted(PlayLayer* layer);
+    void synthesizePreStartHold(PlayLayer* layer, PlayerObject* player, bool isPlayer1);
+    void captureSlot(PlayLayer* layer, PlayerObject* player, HistorySlot& slot, std::int64_t frame, bool preInput);
+    HistorySlot const* findHistory(bool player1, std::int64_t desiredFrame, bool needPreInput = false) const;
     bool probeReady(PlayerObject* player) const;
-    void probeInput(PlayerObject* probe, InputEvent const& event, bool pressEvent);
+    void probeInput(PlayerObject* probe, InputEvent const& event, bool pressEvent, bool forceEnableControls, bool forceDisableAfter);
     PathState runPath(
         PlayLayer* layer,
         ClickJob const& job,
@@ -146,7 +175,12 @@ private:
     void buildPrecisionHUD();
     void clearPrecisionHUD();
     void updatePrecisionHUD();
-    void recordNandlAndUpdate(std::int64_t actionFrame, std::uint64_t windowFrames, bool isRelease);
+    void buildPointsHUD();
+    void clearPointsHUD();
+    void resetPointsHUD();
+    void updatePointsHUD(double deltaPoints = 0.0, std::uint64_t windowFrames = 0);
+    void recomputePointsAndStats();
+    void recordNandlAndUpdate(std::int64_t actionFrame, std::uint64_t windowFrames, bool isRelease, bool ignored = false);
 
     cocos2d::CCPoint ringScreenPos(PlayLayer* layer, cocos2d::CCPoint objectPos) const;
     cocos2d::CCNode* createRingMarkerNode(
@@ -173,8 +207,10 @@ private:
         std::uint64_t releaseWindow,
         bool showPress,
         bool pressOver,
+        bool pressNandlIgnored,
         bool showRelease,
-        bool releaseOver
+        bool releaseOver,
+        bool releaseNandlIgnored
     );
 
     // State
@@ -198,9 +234,15 @@ private:
 
     bool m_sendingJump = false;
     bool m_jumpP1 = true;
+    bool m_pendingButtonLocked = false;
+    PlayerObject* m_inControlEnablePlayer = nullptr;
+    PlayerObject* m_inControlDisablePlayer = nullptr;
+    std::uint64_t m_activeControlOrder = kNoOrder;
 
     std::vector<InputEvent> m_events;
     std::vector<InputEvent> m_probeEvents;
+    std::vector<ControlEvent> m_controlEvents;
+    std::vector<ControlEvent> m_probeControlEvents;
     std::vector<ClickJob> m_clicks;
     std::deque<JumpEvent> m_jumps;
 
@@ -215,6 +257,7 @@ private:
     GJGroundLayer* m_ground2 = nullptr;
 
     std::array<std::array<HistorySlot, kHistSize>, 2> m_history{};
+    std::array<HistorySlot, 2> m_preStartSlot{};
     std::array<std::int64_t, 2> m_lastHistFrame{-1, -1};
 
     bool m_probing = false;
@@ -235,6 +278,17 @@ private:
     cocos2d::CCNode* m_hud = nullptr;
     cocos2d::CCLabelBMFont* m_lastBadgeLabel = nullptr;
     cocos2d::CCNode* m_precHud = nullptr;
+    cocos2d::CCNode* m_pointsHud = nullptr;
+    cocos2d::CCLabelBMFont* m_pointsValueLabel = nullptr;
+    cocos2d::CCLabelBMFont* m_pointsLeftLabel = nullptr;
+    cocos2d::CCLabelBMFont* m_pointsRightLabel = nullptr;
+    cocos2d::CCNode* m_markerLayer = nullptr;
+    CleanupSentinel* m_levelSentinel = nullptr;
+    CleanupSentinel* m_hudSentinel = nullptr;
+    CleanupSentinel* m_precHudSentinel = nullptr;
+    CleanupSentinel* m_pointsSentinel = nullptr;
+    CleanupSentinel* m_markerSentinel = nullptr;
+    bool m_suppressSettingsChanged = false;
     std::vector<CountRow> m_counters;
     std::vector<std::uint64_t> m_measuredWindows; // for rebuilding HUD mid-attempt
     std::deque<RingMarker> m_markers;

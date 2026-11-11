@@ -8,7 +8,7 @@
 namespace na_frame_counter::core {
 
 int parseMaxWindowPreset(std::string_view value) {
-    constexpr std::array<int, 6> kPresets = {12, 17, 30, 60, 120, 240};
+    constexpr std::array<int, 7> kPresets = {10, 12, 17, 30, 60, 120, 240};
     for (int preset : kPresets) {
         if (value == std::to_string(preset)) return preset;
     }
@@ -50,12 +50,30 @@ HudCorner parseHudCorner(std::string_view value) {
     return HudCorner::TopLeft;
 }
 
+PointsCorner parsePointsCorner(std::string_view value) {
+    if (value == "Middle Right") return PointsCorner::MiddleRight;
+    if (value == "Bottom Right") return PointsCorner::BottomRight;
+    return PointsCorner::TopRight;
+}
+
+PointsFormula parsePointsFormula(std::string_view value) {
+    if (value == "60Hz FP (4/N)") return PointsFormula::FP60Equivalent;
+    if (value == "120Hz FP (2/N)") return PointsFormula::FP120Equivalent;
+    if (value == "Squared (1/N^2)") return PointsFormula::Squared240;
+    if (value == "60Hz Align Odds") return PointsFormula::Align60Hz;
+    return PointsFormula::FP240Inverse;
+}
+
 NandlDisplayMode parseNandlDisplayMode(std::string_view value) {
     if (value == "Base") return NandlDisplayMode::Base;
     if (value == "Nerve") return NandlDisplayMode::Nerve;
     if (value == "Fatigue") return NandlDisplayMode::Fatigue;
     if (value == "CPS") return NandlDisplayMode::CPS;
-    if (value == "All Models") return NandlDisplayMode::AllModels;
+    if (value == "Nerve+Fatigue" || value == "N+F") return NandlDisplayMode::NerveFatigue;
+    if (value == "Nerve+CPS" || value == "N+C") return NandlDisplayMode::NerveCPS;
+    if (value == "Fatigue+CPS" || value == "F+C") return NandlDisplayMode::FatigueCPS;
+    if (value == "All 8 Models" || value == "All Models") return NandlDisplayMode::AllModels;
+    if (value == "Custom Toggles" || value == "Custom") return NandlDisplayMode::Custom;
     return NandlDisplayMode::NFC;
 }
 
@@ -73,7 +91,17 @@ char const* soundAssetFilename(SoundStyle style) {
 
 std::vector<WindowBand> bandsForMax(int maxFrames, bool oneAtBottom) {
     std::vector<WindowBand> bands;
-    if (maxFrames <= 12) {
+    if (maxFrames <= 10) {
+        bands = {
+            {9, 10, "9-10"},
+            {7, 8, "7-8"},
+            {5, 6, "5-6"},
+            {4, 4, "4"},
+            {3, 3, "3"},
+            {2, 2, "2"},
+            {1, 1, "1"},
+        };
+    } else if (maxFrames <= 12) {
         bands = {
             {9, 12, "9-12"},
             {7, 8, "7-8"},
@@ -266,6 +294,29 @@ float pitchForWindow(std::uint64_t frames, ModSettingsSnapshot const& cfg) {
     }
 
     return static_cast<float>(std::clamp(pitch, lo, hi));
+}
+
+double pointsForWindow(std::uint64_t frames, ModSettingsSnapshot const& cfg) {
+    if (frames == 0) return 0.0;
+    if (cfg.maxWindowFrames > 0 && frames > static_cast<std::uint64_t>(cfg.maxWindowFrames)) {
+        return 0.0;
+    }
+    const double n = static_cast<double>(frames);
+    switch (cfg.pointsFormula) {
+        case PointsFormula::FP60Equivalent:
+            return 4.0 / n;
+        case PointsFormula::FP120Equivalent:
+            return 2.0 / n;
+        case PointsFormula::Squared240:
+            return 1.0 / (n * n);
+        case PointsFormula::Align60Hz:
+            if (frames <= 4) return 1.0;
+            if (frames < 8) return (8.0 - n) / 4.0;
+            return 0.0;
+        case PointsFormula::FP240Inverse:
+        default:
+            return 1.0 / n;
+    }
 }
 
 std::string formatMarkerText(

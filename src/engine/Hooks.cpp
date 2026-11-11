@@ -211,6 +211,11 @@ class $modify(NAPauseLayer, PauseLayer) {
         ProbeController::get().pauseEnd(PlayLayer::get());
         PauseLayer::onRestartFull(sender);
     }
+
+    void goEdit() {
+        ProbeController::get().pauseEnd(PlayLayer::get());
+        PauseLayer::goEdit();
+    }
 };
 
 class $modify(NAFMODAudioEngine, FMODAudioEngine) {
@@ -302,6 +307,28 @@ class $modify(NAPlayerObject, PlayerObject) {
         const bool accepted = PlayerObject::releaseButton(button);
         controller.afterButton(this, button, false, accepted);
         return accepted;
+    }
+
+    void disablePlayerControls() {
+        auto& controller = ProbeController::get();
+        if (controller.probing() && controller.isProbe(this)) {
+            PlayerObject::disablePlayerControls();
+            return;
+        }
+        controller.beforeControlToggle(this, false);
+        PlayerObject::disablePlayerControls();
+        controller.afterControlToggle(this, false);
+    }
+
+    void enablePlayerControls() {
+        auto& controller = ProbeController::get();
+        if (controller.probing() && controller.isProbe(this)) {
+            PlayerObject::enablePlayerControls();
+            return;
+        }
+        controller.beforeControlToggle(this, true);
+        PlayerObject::enablePlayerControls();
+        controller.afterControlToggle(this, true);
     }
 
     void ringJump(RingObject* object, bool skipCheck) {
@@ -401,8 +428,10 @@ class $modify(NABaseGameLayer, GJBaseGameLayer) {
     }
 
     void update(float dt) override {
+        auto& controller = ProbeController::get();
+        controller.beforeUpdate(this);
         GJBaseGameLayer::update(dt);
-        ProbeController::get().afterUpdate(this);
+        controller.afterUpdate(this);
     }
 
     void updateDebugDraw() override {

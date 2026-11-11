@@ -57,6 +57,9 @@ void testAllModelsAndMonotonicity() {
     assert(summary.nerve.valid);
     assert(summary.fatigue.valid);
     assert(summary.cps.valid);
+    assert(summary.nerveFatigue.valid);
+    assert(summary.nerveCps.valid);
+    assert(summary.fatigueCps.valid);
     assert(summary.nfc.valid);
 
     // Every model must converge to target clear time = 86400s
@@ -64,12 +67,22 @@ void testAllModelsAndMonotonicity() {
     expectNear(summary.nerve.expectedClearTime, 86400.0, 1e-3, "multi Nerve E[Tc]");
     expectNear(summary.fatigue.expectedClearTime, 86400.0, 1e-3, "multi Fatigue E[Tc]");
     expectNear(summary.cps.expectedClearTime, 86400.0, 1e-3, "multi CPS E[Tc]");
+    expectNear(summary.nerveFatigue.expectedClearTime, 86400.0, 1e-3, "multi N+F E[Tc]");
+    expectNear(summary.nerveCps.expectedClearTime, 86400.0, 1e-3, "multi N+C E[Tc]");
+    expectNear(summary.fatigueCps.expectedClearTime, 86400.0, 1e-3, "multi F+C E[Tc]");
     expectNear(summary.nfc.expectedClearTime, 86400.0, 1e-3, "multi NFC E[Tc]");
+
+    // Verify modelMetrics helper maps all 8 models cleanly
+    expectNear(NandlCalculator::modelMetrics(summary, NandlModel::NerveFatigue).lStar, summary.nerveFatigue.lStar, 1e-12, "modelMetrics NF");
+    expectNear(NandlCalculator::modelMetrics(summary, NandlModel::NerveCPS).lStar, summary.nerveCps.lStar, 1e-12, "modelMetrics NC");
+    expectNear(NandlCalculator::modelMetrics(summary, NandlModel::FatigueCPS).lStar, summary.fatigueCps.lStar, 1e-12, "modelMetrics FC");
 
     // Nerve, Fatigue, and 5-CPS penalty each make the run harder than Base
     assert(summary.nerve.lStar > summary.base.lStar);
     assert(summary.fatigue.lStar > summary.base.lStar);
     assert(summary.cps.lStar > summary.base.lStar);
+    assert(summary.nerveFatigue.lStar > summary.nerve.lStar);
+    assert(summary.nerveFatigue.lStar > summary.fatigue.lStar);
     assert(summary.nfc.lStar > summary.nerve.lStar);
     assert(summary.nfc.lStar > summary.fatigue.lStar);
     assert(summary.nfc.lStar > summary.cps.lStar);
@@ -94,6 +107,53 @@ void testAllModelsAndMonotonicity() {
     const auto singleRes = NandlCalculator::solveModel(singleInput, params, NandlModel::Base);
     const auto swiftRes = NandlCalculator::solveModel(swiftInput, params, NandlModel::Base);
     assert(swiftRes.lStar > singleRes.lStar);
+}
+
+void testFrameZeroAndIgnoredInputs() {
+    NandlParams params;
+    params.macroFps = 240.0;
+    params.respawnTime = 0.0;
+    params.targetTime = 86400.0;
+
+    // Frame-0 first input must NOT blow up CPS via 1e-9 clamp; dt=1.0 => (4/2)^kC = 2^kC multiplier
+    std::vector<InputTiming> frameZero = {
+        {0.0, 1.0, 1, false, false},
+        {240.0, 1.0, 1, false, false},
+    };
+    const auto fzSummary = NandlCalculator::solveAll(frameZero, params);
+    assert(fzSummary.cps.valid);
+    assert(fzSummary.nfc.valid);
+    // Must stay close to slow 1-CPS range (not blown up 10x+ by 2e9 CPS!)
+    assert(fzSummary.cps.lStar < fzSummary.base.lStar);
+    expectNear(fzSummary.cps.expectedClearTime, 86400.0, 1e-3, "frame-0 CPS E[Tc]");
+
+    // Only '-' ignored inputs => 100% pass (L* = 0, P = 1)
+    std::vector<InputTiming> onlyIgnored = {
+        {120.0, 0.0, 1, false, true},
+        {240.0, 0.0, 1, false, true},
+    };
+    const auto onlyIgn = NandlCalculator::solveAll(onlyIgnored, params);
+    assert(onlyIgn.base.valid && onlyIgn.nfc.valid);
+    expectNear(onlyIgn.base.lStar, 0.0, 1e-12, "only-ignored Base L* == 0");
+    expectNear(onlyIgn.base.passProbability, 1.0, 1e-12, "only-ignored Base P == 1");
+    expectNear(onlyIgn.nfc.lStar, 0.0, 1e-12, "only-ignored NFC L* == 0");
+
+    // Ignored '-' input before a real 1F input:
+    // - Base ignores '-' completely (same L* as the single 1F input alone)
+    // - Fatigue counts the '-' input in index i (making Fatigue L* strictly higher than without '-')
+    // - CPS treats '-' as (1 + maxWindow = 3F) at high CPS
+    std::vector<InputTiming> singleAt480 = {
+        {480.0, 2.0, 1, false, false},
+    };
+    std::vector<InputTiming> withIgnoredBefore = {
+        {456.0, 0.0, 1, false, true},
+        {480.0, 2.0, 1, false, false},
+    };
+    const auto sAlone = NandlCalculator::solveAll(singleAt480, params);
+    const auto sWithIgn = NandlCalculator::solveAll(withIgnoredBefore, params);
+    expectNear(sWithIgn.base.lStar, sAlone.base.lStar, 1e-6, "ignored '-' leaves Base unchanged");
+    assert(sWithIgn.fatigue.lStar > sAlone.fatigue.lStar);
+    assert(sWithIgn.cps.lStar > sAlone.cps.lStar);
 }
 
 void testPitchMapping() {
@@ -132,7 +192,8 @@ void testColorsBucketsAndFormatting() {
     cfg.custom1F = {12, 34, 56};
     assert((colorForWindow(1, cfg) == RGBColor{12, 34, 56}));
 
-    for (int preset : {12, 17, 30, 60, 120, 240}) {
+    for (int preset : {10, 12, 17, 30, 60, 120, 240}) {
+        assert(parseMaxWindowPreset(std::to_string(preset)) == preset);
         const auto bottom = bandsForMax(preset, true);
         const auto top = bandsForMax(preset, false);
         assert(bottom.size() == top.size());
@@ -149,10 +210,62 @@ void testColorsBucketsAndFormatting() {
         }
     }
 
+    assert(parseNandlDisplayMode("Nerve+Fatigue") == NandlDisplayMode::NerveFatigue);
+    assert(parseNandlDisplayMode("Nerve+CPS") == NandlDisplayMode::NerveCPS);
+    assert(parseNandlDisplayMode("Fatigue+CPS") == NandlDisplayMode::FatigueCPS);
+    assert(parseNandlDisplayMode("All 8 Models") == NandlDisplayMode::AllModels);
+    assert(parseNandlDisplayMode("Custom Toggles") == NandlDisplayMode::Custom);
+
     assert(formatMarkerText(1, false, false, 12, true) == "1");
     assert(formatMarkerText(1, true, false, 12, true) == "R1");
     assert(formatMarkerText(1, true, false, 12, false) == "1");
     assert(formatMarkerText(13, false, true, 12, true) == ">12");
+}
+
+void testPointsScoring() {
+    assert(parsePointsCorner("Top Right") == PointsCorner::TopRight);
+    assert(parsePointsCorner("Middle Right") == PointsCorner::MiddleRight);
+    assert(parsePointsCorner("Bottom Right") == PointsCorner::BottomRight);
+
+    assert(parsePointsFormula("240Hz FP (1/N)") == PointsFormula::FP240Inverse);
+    assert(parsePointsFormula("60Hz FP (4/N)") == PointsFormula::FP60Equivalent);
+    assert(parsePointsFormula("120Hz FP (2/N)") == PointsFormula::FP120Equivalent);
+    assert(parsePointsFormula("Squared (1/N^2)") == PointsFormula::Squared240);
+    assert(parsePointsFormula("60Hz Align Odds") == PointsFormula::Align60Hz);
+
+    ModSettingsSnapshot cfg;
+    cfg.maxWindowFrames = 12;
+
+    cfg.pointsFormula = PointsFormula::FP240Inverse;
+    expectNear(pointsForWindow(0, cfg), 0.0, 1e-9, "0F gives 0 points");
+    expectNear(pointsForWindow(1, cfg), 1.0, 1e-9, "240Hz 1F = 1.00");
+    expectNear(pointsForWindow(2, cfg), 0.5, 1e-9, "240Hz 2F = 0.50");
+    expectNear(pointsForWindow(3, cfg), 1.0 / 3.0, 1e-9, "240Hz 3F = 0.333...");
+    expectNear(pointsForWindow(4, cfg), 0.25, 1e-9, "240Hz 4F = 0.25");
+    expectNear(pointsForWindow(13, cfg), 0.0, 1e-9, ">maxWindowFrames gives 0 points");
+
+    cfg.pointsFormula = PointsFormula::FP60Equivalent;
+    expectNear(pointsForWindow(1, cfg), 4.0, 1e-9, "60Hz FP 1F = 4.0");
+    expectNear(pointsForWindow(4, cfg), 1.0, 1e-9, "60Hz FP 4F = 1.0");
+    expectNear(pointsForWindow(8, cfg), 0.5, 1e-9, "60Hz FP 8F = 0.5");
+
+    cfg.pointsFormula = PointsFormula::FP120Equivalent;
+    expectNear(pointsForWindow(1, cfg), 2.0, 1e-9, "120Hz FP 1F = 2.0");
+    expectNear(pointsForWindow(2, cfg), 1.0, 1e-9, "120Hz FP 2F = 1.0");
+    expectNear(pointsForWindow(4, cfg), 0.5, 1e-9, "120Hz FP 4F = 0.5");
+
+    cfg.pointsFormula = PointsFormula::Squared240;
+    expectNear(pointsForWindow(1, cfg), 1.0, 1e-9, "Squared 1F = 1.0");
+    expectNear(pointsForWindow(2, cfg), 0.25, 1e-9, "Squared 2F = 0.25");
+    expectNear(pointsForWindow(4, cfg), 0.0625, 1e-9, "Squared 4F = 0.0625");
+
+    cfg.pointsFormula = PointsFormula::Align60Hz;
+    expectNear(pointsForWindow(1, cfg), 1.0, 1e-9, "Align60 1F = 1.00");
+    expectNear(pointsForWindow(4, cfg), 1.0, 1e-9, "Align60 4F = 1.00");
+    expectNear(pointsForWindow(5, cfg), 0.75, 1e-9, "Align60 5F = 0.75");
+    expectNear(pointsForWindow(6, cfg), 0.50, 1e-9, "Align60 6F = 0.50");
+    expectNear(pointsForWindow(7, cfg), 0.25, 1e-9, "Align60 7F = 0.25");
+    expectNear(pointsForWindow(8, cfg), 0.0, 1e-9, "Align60 8F = 0.00");
 }
 
 } // namespace
@@ -160,8 +273,10 @@ void testColorsBucketsAndFormatting() {
 int main() {
     testSingleInputAnalytical();
     testAllModelsAndMonotonicity();
+    testFrameZeroAndIgnoredInputs();
     testPitchMapping();
     testColorsBucketsAndFormatting();
+    testPointsScoring();
     std::cout << "All NA Frame Counter core unit tests passed!\n";
     return 0;
 }

@@ -96,14 +96,16 @@ ModMenuPopup* ModMenuPopup::create() {
         ret->autorelease();
         return ret;
     }
-    CC_SAFE_DELETE(ret);
+    CC_SAFE_RELEASE(ret);
     return nullptr;
 }
 
 ModMenuPopup* ModMenuPopup::openOrFocus() {
     if (auto* scene = CCDirector::sharedDirector()->getRunningScene()) {
         if (auto* existing = typeinfo_cast<ModMenuPopup*>(scene->getChildByID(kPopupID))) {
-            return existing;
+            if (!existing->m_closed) {
+                return existing;
+            }
         }
     }
     if (auto* popup = ModMenuPopup::create()) {
@@ -118,6 +120,8 @@ bool ModMenuPopup::init() {
     if (!Popup::init(kPopupW, kPopupH)) {
         return false;
     }
+
+    geode::WeakRef<ModMenuPopup> weakSelf(this);
 
     this->setTitle("NA Frame Counter", "goldFont.fnt", 0.68f, 18.f);
 
@@ -151,13 +155,15 @@ bool ModMenuPopup::init() {
     card->addChild(m_scrollbar, 2);
 
     // Bottom footer stats & buttons
-    m_statsLabel = CCLabelBMFont::create("", "chatFont.fnt");
-    m_statsLabel->setAnchorPoint({0.f, 0.5f});
-    m_statsLabel->setPosition({16.f, 25.f});
-    m_statsLabel->setScale(0.64f);
-    m_statsLabel->setColor({210, 235, 255});
-    m_mainLayer->addChild(m_statsLabel);
-    refreshStatsFooter();
+    m_statsLabel = CCLabelBMFont::create("Att: 0  |  1F: 0  |  Inputs: 0  |  Best L*: 0.00", "chatFont.fnt");
+    if (m_statsLabel) {
+        m_statsLabel->setAnchorPoint({0.f, 0.5f});
+        m_statsLabel->setPosition({16.f, 25.f});
+        m_statsLabel->setScale(0.64f);
+        m_statsLabel->setColor({210, 235, 255});
+        m_mainLayer->addChild(m_statsLabel);
+        refreshStatsFooter();
+    }
 
     auto* footerMenu = CCMenu::create();
     footerMenu->setPosition({0.f, 0.f});
@@ -165,24 +171,31 @@ bool ModMenuPopup::init() {
     m_mainLayer->addChild(footerMenu, 5);
 
     auto* settingsSpr = ButtonSprite::create("Geode Settings", 92, true, "goldFont.fnt", "GJ_button_01.png", 26.f, 0.42f);
-    auto* settingsBtn = CCMenuItemExt::createSpriteExtra(settingsSpr, [this](CCMenuItemSpriteExtra*) {
-        geode::openSettingsPopup(Mod::get());
+    auto* settingsBtn = CCMenuItemExt::createSpriteExtra(settingsSpr, [](CCMenuItemSpriteExtra*) {
+        if (auto* mod = Mod::get()) {
+            geode::openSettingsPopup(mod);
+        }
     });
     settingsBtn->setPosition({248.f, 25.f});
     footerMenu->addChild(settingsBtn);
 
     auto* resetSpr = ButtonSprite::create("Reset All", 62, true, "goldFont.fnt", "GJ_button_06.png", 26.f, 0.42f);
-    auto* resetBtn = CCMenuItemExt::createSpriteExtra(resetSpr, [self = geode::Ref<ModMenuPopup>(this)](CCMenuItemSpriteExtra*) {
+    auto* resetBtn = CCMenuItemExt::createSpriteExtra(resetSpr, [weakSelf](CCMenuItemSpriteExtra*) {
         geode::createQuickPopup(
             "Reset NA Frame Counter",
             "Reset all <cy>NA Frame Counter</c> settings back to their defaults?",
             "Cancel",
             "Reset",
-            [self](FLAlertLayer*, bool confirmed) {
-                if (!confirmed || !self) return;
+            [weakSelf](FLAlertLayer*, bool confirmed) {
+                if (!confirmed) return;
+                auto& ctrl = engine::ProbeController::get();
+                ctrl.setSuppressSettingsChanged(true);
                 core::SettingsBridge::resetAll();
-                engine::ProbeController::get().onSettingsChanged();
-                self->rebuildCurrentTab();
+                ctrl.setSuppressSettingsChanged(false);
+                ctrl.onSettingsChanged();
+                if (auto self = weakSelf.lock(); self && !self->m_closed) {
+                    self->rebuildCurrentTab();
+                }
             }
         );
     });
@@ -190,8 +203,10 @@ bool ModMenuPopup::init() {
     footerMenu->addChild(resetBtn);
 
     auto* doneSpr = ButtonSprite::create("Done", 48, true, "goldFont.fnt", "GJ_button_01.png", 26.f, 0.44f);
-    auto* doneBtn = CCMenuItemExt::createSpriteExtra(doneSpr, [this](CCMenuItemSpriteExtra*) {
-        this->onClose(nullptr);
+    auto* doneBtn = CCMenuItemExt::createSpriteExtra(doneSpr, [weakSelf](CCMenuItemSpriteExtra*) {
+        if (auto self = weakSelf.lock(); self && !self->m_closed) {
+            self->onClose(nullptr);
+        }
     });
     doneBtn->setPosition({400.f, 25.f});
     footerMenu->addChild(doneBtn);
@@ -201,14 +216,20 @@ bool ModMenuPopup::init() {
 }
 
 void ModMenuPopup::onClose(CCObject* sender) {
+    if (m_closed) return;
+    m_closed = true;
+    m_previewBox = nullptr;
+    m_statsLabel = nullptr;
+    m_scroll = nullptr;
+    m_scrollbar = nullptr;
+    m_tabBar = nullptr;
+    m_contentContainer = nullptr;
+    m_tabButtons.clear();
     Popup::onClose(sender);
 }
 
 void ModMenuPopup::buildTabBar() {
-    if (m_tabBar) {
-        m_tabBar->removeFromParentAndCleanup(true);
-        m_tabBar = nullptr;
-    }
+    if (m_tabBar) return;
     m_tabButtons.clear();
 
     auto* menu = CCMenu::create();
@@ -229,37 +250,57 @@ void ModMenuPopup::buildTabBar() {
         {Tab::HudNandl, "HUD & NaNDL", 368.f},
     };
 
+    geode::WeakRef<ModMenuPopup> weakSelf(this);
+
     for (auto const& d : defs) {
         const bool active = (m_activeTab == d.tab);
         const char* bg = active ? "GJ_button_01.png" : "GJ_button_04.png";
         const float w = (d.tab == Tab::HudNandl) ? 102.f : 86.f;
         auto* spr = ButtonSprite::create(d.label, static_cast<int>(w), true, "bigFont.fnt", bg, 24.f, 0.40f);
-        auto* btn = CCMenuItemExt::createSpriteExtra(spr, [this, tab = d.tab](CCMenuItemSpriteExtra*) {
-            this->selectTab(tab);
+        auto* btn = CCMenuItemExt::createSpriteExtra(spr, [weakSelf, tab = d.tab](CCMenuItemSpriteExtra*) {
+            if (auto self = weakSelf.lock(); self && !self->m_closed) {
+                self->selectTab(tab);
+            }
         });
         btn->setPosition({d.x, 234.f});
         menu->addChild(btn);
-        m_tabButtons.push_back(btn);
+        m_tabButtons.push_back({d.tab, d.label, w, btn});
+    }
+}
+
+void ModMenuPopup::updateTabBarVisuals() {
+    for (auto const& entry : m_tabButtons) {
+        if (!entry.button) continue;
+        const bool active = (m_activeTab == entry.tab);
+        const char* bg = active ? "GJ_button_01.png" : "GJ_button_04.png";
+        if (auto* spr = ButtonSprite::create(
+            entry.label, static_cast<int>(entry.width), true, "bigFont.fnt", bg, 24.f, 0.40f
+        )) {
+            entry.button->setSprite(spr);
+        }
     }
 }
 
 void ModMenuPopup::selectTab(Tab tab) {
+    if (m_closed) return;
     m_activeTab = tab;
-    buildTabBar();
+    updateTabBarVisuals();
     rebuildCurrentTab();
 }
 
 void ModMenuPopup::refreshStatsFooter() {
-    if (!m_statsLabel) return;
+    if (m_closed || !m_statsLabel) return;
     auto const& st = engine::ProbeController::get().stats();
+    auto const& cfg = engine::ProbeController::get().config();
+    const int dec = std::clamp(cfg.pointsDecimals, 1, 4);
     m_statsLabel->setString(fmt::format(
-        "Att: {}  |  1F: {}  |  Inputs: {}  |  Best L*: {:.2f}",
-        st.attempts, st.framePerfects, st.totalMeasured, st.bestLStar
+        "Att: {}  |  1F: {}  |  Pts: {:.{}f}  |  Best L*: {:.2f}",
+        st.attempts, st.framePerfects, st.totalPoints, dec, st.bestLStar
     ).c_str());
 }
 
 void ModMenuPopup::updateVisualPreview() {
-    if (!m_previewBox) return;
+    if (m_closed || !m_previewBox) return;
     m_previewBox->removeAllChildrenWithCleanup(true);
 
     const auto cfg = core::SettingsBridge::read();
@@ -337,7 +378,6 @@ void ModMenuPopup::addToggleRow(
             // Note: CCMenuItemToggler callback runs BEFORE m_toggled flips in GD!
             const bool nextVal = !sender->isToggled();
             core::SettingsBridge::setBool(keyCopy, nextVal);
-            engine::ProbeController::get().onSettingsChanged();
             if (sharedCb && *sharedCb) (*sharedCb)(nextVal);
         }
     );
@@ -373,13 +413,16 @@ void ModMenuPopup::addCycleRow(
     menu->setContentSize({width, kRowH});
     row->addChild(menu, 2);
 
-    auto* valLbl = CCLabelBMFont::create(current.c_str(), "bigFont.fnt");
-    valLbl->setAnchorPoint({0.5f, 0.5f});
-    valLbl->setPosition({width - 82.f, kRowH * 0.5f});
-    valLbl->setScale(0.34f);
-    valLbl->setColor({140, 235, 255});
-    valLbl->limitLabelWidth(96.f, 0.34f, 0.18f);
-    row->addChild(valLbl, 2);
+    geode::WeakRef<CCLabelBMFont> weakVal;
+    if (auto* valLbl = CCLabelBMFont::create(current.c_str(), "bigFont.fnt")) {
+        valLbl->setAnchorPoint({0.5f, 0.5f});
+        valLbl->setPosition({width - 82.f, kRowH * 0.5f});
+        valLbl->setScale(0.34f);
+        valLbl->setColor({140, 235, 255});
+        valLbl->limitLabelWidth(96.f, 0.34f, 0.18f);
+        row->addChild(valLbl, 2);
+        weakVal = geode::WeakRef<CCLabelBMFont>(valLbl);
+    }
 
     auto state = std::make_shared<std::size_t>(0);
     for (std::size_t i = 0; i < options.size(); ++i) {
@@ -390,34 +433,37 @@ void ModMenuPopup::addCycleRow(
     }
 
     auto sharedCb = std::make_shared<geode::Function<void(std::string const&)>>(std::move(extraCallback));
-    auto applyIndex = [options, settingKey, valLbl, state, sharedCb](int delta) {
+    auto applyIndex = [options, settingKey, weakVal, state, sharedCb](int delta) {
         if (options.empty()) return;
         const std::size_t n = options.size();
         *state = (*state + n + static_cast<std::size_t>(delta)) % n;
         auto const& next = options[*state];
-        valLbl->setString(next.c_str());
-        valLbl->limitLabelWidth(96.f, 0.34f, 0.18f);
+        if (auto lbl = weakVal.lock()) {
+            lbl->setString(next.c_str());
+            lbl->limitLabelWidth(96.f, 0.34f, 0.18f);
+        }
         core::SettingsBridge::setString(settingKey, next);
-        engine::ProbeController::get().onSettingsChanged();
         if (sharedCb && *sharedCb) (*sharedCb)(next);
     };
 
-    auto* leftSpr = CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png");
-    leftSpr->setScale(0.46f);
-    auto* leftBtn = CCMenuItemExt::createSpriteExtra(leftSpr, [applyIndex](CCMenuItemSpriteExtra*) {
-        applyIndex(-1);
-    });
-    leftBtn->setPosition({width - 144.f, kRowH * 0.5f});
-    menu->addChild(leftBtn);
+    if (auto* leftSpr = CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png")) {
+        leftSpr->setScale(0.46f);
+        auto* leftBtn = CCMenuItemExt::createSpriteExtra(leftSpr, [applyIndex](CCMenuItemSpriteExtra*) {
+            applyIndex(-1);
+        });
+        leftBtn->setPosition({width - 144.f, kRowH * 0.5f});
+        menu->addChild(leftBtn);
+    }
 
-    auto* rightSpr = CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png");
-    rightSpr->setScale(0.46f);
-    rightSpr->setFlipX(true);
-    auto* rightBtn = CCMenuItemExt::createSpriteExtra(rightSpr, [applyIndex](CCMenuItemSpriteExtra*) {
-        applyIndex(+1);
-    });
-    rightBtn->setPosition({width - 20.f, kRowH * 0.5f});
-    menu->addChild(rightBtn);
+    if (auto* rightSpr = CCSprite::createWithSpriteFrameName("GJ_arrow_01_001.png")) {
+        rightSpr->setScale(0.46f);
+        rightSpr->setFlipX(true);
+        auto* rightBtn = CCMenuItemExt::createSpriteExtra(rightSpr, [applyIndex](CCMenuItemSpriteExtra*) {
+            applyIndex(+1);
+        });
+        rightBtn->setPosition({width - 20.f, kRowH * 0.5f});
+        menu->addChild(rightBtn);
+    }
 
     rows.push_back(row);
 }
@@ -446,32 +492,37 @@ void ModMenuPopup::addSliderRow(
         row->addChild(lbl, 1);
     }
 
-    auto* valLbl = CCLabelBMFont::create("", "bigFont.fnt");
-    valLbl->setAnchorPoint({1.f, 0.5f});
-    valLbl->setPosition({width - 12.f, kRowH * 0.5f});
-    valLbl->setScale(0.34f);
-    valLbl->setColor({255, 235, 130});
-    row->addChild(valLbl, 2);
+    auto* valLbl = CCLabelBMFont::create("0", "bigFont.fnt");
+    if (valLbl) {
+        valLbl->setAnchorPoint({1.f, 0.5f});
+        valLbl->setPosition({width - 12.f, kRowH * 0.5f});
+        valLbl->setScale(0.34f);
+        valLbl->setColor({255, 235, 130});
+        row->addChild(valLbl, 2);
+    }
 
     auto sharedCb = std::make_shared<geode::Function<void()>>(std::move(extraCallback));
-    auto* slider = SliderNode::create([settingKey, isInt, sharedCb](SliderNode*, float val) {
-        if (isInt) {
-            core::SettingsBridge::setInt(settingKey, static_cast<std::int64_t>(std::llround(val)));
-        } else {
-            core::SettingsBridge::setFloat(settingKey, static_cast<double>(val));
+    if (auto* slider = SliderNode::create(nullptr)) {
+        slider->setMin(minVal);
+        slider->setMax(maxVal);
+        slider->setSnapStep(step);
+        slider->setValue(std::clamp(value, minVal, maxVal));
+        if (valLbl) {
+            slider->linkLabel(valLbl, precision);
         }
-        engine::ProbeController::get().onSettingsChanged();
-        if (sharedCb && *sharedCb) (*sharedCb)();
-    });
-    slider->setMin(minVal);
-    slider->setMax(maxVal);
-    slider->setSnapStep(step);
-    slider->setValue(std::clamp(value, minVal, maxVal));
-    slider->linkLabel(valLbl, precision);
-    slider->setScale(0.70f);
-    slider->setPosition({width - 115.f, kRowH * 0.5f});
-    slider->setTouchPriority(-503);
-    row->addChild(slider, 2);
+        slider->setScale(0.70f);
+        slider->setPosition({width - 115.f, kRowH * 0.5f});
+        slider->setTouchPriority(-503);
+        slider->setSlideCallback([settingKey, isInt, sharedCb](SliderNode*, float val) {
+            if (isInt) {
+                core::SettingsBridge::setInt(settingKey, static_cast<std::int64_t>(std::llround(val)));
+            } else {
+                core::SettingsBridge::setFloat(settingKey, static_cast<double>(val));
+            }
+            if (sharedCb && *sharedCb) (*sharedCb)();
+        });
+        row->addChild(slider, 2);
+    }
 
     rows.push_back(row);
 }
@@ -510,7 +561,6 @@ void ModMenuPopup::addNumberInputRow(
         if (end == text.c_str() || !std::isfinite(parsed)) return;
         parsed = std::clamp(parsed, minVal, maxVal);
         core::SettingsBridge::setFloat(settingKey, parsed);
-        engine::ProbeController::get().onSettingsChanged();
     });
     row->addChild(input, 2);
 
@@ -518,11 +568,12 @@ void ModMenuPopup::addNumberInputRow(
 }
 
 void ModMenuPopup::rebuildCurrentTab() {
-    if (!m_scroll || !m_scroll->m_contentLayer) return;
+    if (m_closed || !m_scroll || !m_scroll->m_contentLayer) return;
 
     m_previewBox = nullptr;
     m_scroll->m_contentLayer->removeAllChildrenWithCleanup(true);
 
+    geode::WeakRef<ModMenuPopup> weakSelf(this);
     auto const cfg = core::SettingsBridge::read();
     auto* mod = Mod::get();
     std::vector<CCNode*> rows;
@@ -535,7 +586,7 @@ void ModMenuPopup::rebuildCurrentTab() {
             addToggleRow(rows, kListW, "Measure Release Windows", "measure-releases", cfg.measureReleases);
             addCycleRow(
                 rows, kListW, "Maximum Window (Frames)",
-                {"12", "17", "30", "60", "120", "240"},
+                {"10", "12", "17", "30", "60", "120", "240"},
                 mod ? mod->getSettingValue<std::string>("maximum-window-frames") : "12",
                 "maximum-window-frames"
             );
@@ -550,22 +601,26 @@ void ModMenuPopup::rebuildCurrentTab() {
             updateVisualPreview();
 
             addSectionHeader(rows, kListW, "Circle Outline & Number Markers");
-            addToggleRow(rows, kListW, "Show Click/Release Circles", "show-rings", cfg.showRings, [this](bool) {
-                this->updateVisualPreview();
+            addToggleRow(rows, kListW, "Show Click/Release Circles", "show-rings", cfg.showRings, [weakSelf](bool) {
+                if (auto self = weakSelf.lock(); self && !self->m_closed) self->updateVisualPreview();
             });
             addCycleRow(
                 rows, kListW, "Number Position",
                 {"Left", "Center", "Top", "Right"},
                 mod ? mod->getSettingValue<std::string>("label-placement") : "Left",
                 "label-placement",
-                [this](std::string const&) { this->updateVisualPreview(); }
+                [weakSelf](std::string const&) {
+                    if (auto self = weakSelf.lock(); self && !self->m_closed) self->updateVisualPreview();
+                }
             );
             addCycleRow(
                 rows, kListW, "Color Palette",
                 {"NaN GD Classic", "NaN GD Fire", "Pastel", "Monochrome", "Custom 1-5+"},
                 mod ? mod->getSettingValue<std::string>("color-preset") : "NaN GD Classic",
                 "color-preset",
-                [this](std::string const&) { this->updateVisualPreview(); }
+                [weakSelf](std::string const&) {
+                    if (auto self = weakSelf.lock(); self && !self->m_closed) self->updateVisualPreview();
+                }
             );
             {
                 constexpr float kSwatchH = 30.f;
@@ -601,16 +656,19 @@ void ModMenuPopup::rebuildCurrentTab() {
                         box->addChild(tag, 1);
                     }
                     std::string keyStr(sw.key);
-                    auto* btn = CCMenuItemExt::createSpriteExtra(box, [self = geode::Ref<ModMenuPopup>(this), keyStr](CCMenuItemSpriteExtra*) {
+                    auto* btn = CCMenuItemExt::createSpriteExtra(box, [weakSelf, keyStr](CCMenuItemSpriteExtra*) {
                         auto* m = Mod::get();
                         ccColor3B curr = m ? m->getSettingValue<ccColor3B>(keyStr) : ccColor3B{255, 255, 255};
                         auto* picker = ColorPickPopup::create(curr);
-                        picker->setCallback([self, keyStr](ccColor4B const& chosen) {
+                        picker->setCallback([weakSelf, keyStr](ccColor4B const& chosen) {
                             const ccColor3B c3{chosen.r, chosen.g, chosen.b};
+                            auto& ctrl = engine::ProbeController::get();
+                            ctrl.setSuppressSettingsChanged(true);
                             core::SettingsBridge::setColor(keyStr, c3);
                             core::SettingsBridge::setString("color-preset", "Custom 1-5+");
-                            engine::ProbeController::get().onSettingsChanged();
-                            if (self) {
+                            ctrl.setSuppressSettingsChanged(false);
+                            ctrl.onSettingsChanged();
+                            if (auto self = weakSelf.lock(); self && !self->m_closed) {
                                 self->rebuildCurrentTab();
                             }
                         });
@@ -621,19 +679,19 @@ void ModMenuPopup::rebuildCurrentTab() {
                 }
                 rows.push_back(swatchRow);
             }
-            addSliderRow(rows, kListW, "Circle Radius", "circle-radius", cfg.circleRadius, 5.f, 26.f, 0.5f, 1, false, [this]() {
-                this->updateVisualPreview();
+            addSliderRow(rows, kListW, "Circle Radius", "circle-radius", cfg.circleRadius, 5.f, 26.f, 0.5f, 1, false, [weakSelf]() {
+                if (auto self = weakSelf.lock(); self && !self->m_closed) self->updateVisualPreview();
             });
-            addSliderRow(rows, kListW, "Outline Thickness", "circle-thickness", cfg.circleThickness, 1.f, 5.f, 0.25f, 2, false, [this]() {
-                this->updateVisualPreview();
+            addSliderRow(rows, kListW, "Outline Thickness", "circle-thickness", cfg.circleThickness, 1.f, 5.f, 0.25f, 2, false, [weakSelf]() {
+                if (auto self = weakSelf.lock(); self && !self->m_closed) self->updateVisualPreview();
             });
-            addSliderRow(rows, kListW, "Marker Scale", "marker-scale", cfg.markerScale, 0.5f, 2.0f, 0.05f, 2, false, [this]() {
-                this->updateVisualPreview();
+            addSliderRow(rows, kListW, "Marker Scale", "marker-scale", cfg.markerScale, 0.5f, 2.0f, 0.05f, 2, false, [weakSelf]() {
+                if (auto self = weakSelf.lock(); self && !self->m_closed) self->updateVisualPreview();
             });
             addSliderRow(rows, kListW, "Fade Duration (0=Keep)", "marker-fade-seconds", cfg.markerFadeSeconds, 0.f, 6.f, 0.25f, 2);
             addToggleRow(rows, kListW, "Scale Markers With Zoom", "scale-with-zoom", cfg.scaleWithZoom);
-            addToggleRow(rows, kListW, "Tag Releases With 'R' (e.g. R1)", "distinguish-release", cfg.distinguishRelease, [this](bool) {
-                this->updateVisualPreview();
+            addToggleRow(rows, kListW, "Tag Releases With 'R' (e.g. R1)", "distinguish-release", cfg.distinguishRelease, [weakSelf](bool) {
+                if (auto self = weakSelf.lock(); self && !self->m_closed) self->updateVisualPreview();
             });
             break;
         }
@@ -707,15 +765,53 @@ void ModMenuPopup::rebuildCurrentTab() {
             );
             addToggleRow(rows, kListW, "Show Last Input Badge", "show-last-badge", cfg.showLastBadge);
 
+            addSectionHeader(rows, kListW, "Right-Side Total Points");
+            addToggleRow(rows, kListW, "Show Total Points HUD", "show-points-hud", cfg.showPointsHud);
+            addCycleRow(
+                rows, kListW, "Points Position",
+                {"Top Right", "Middle Right", "Bottom Right"},
+                mod ? mod->getSettingValue<std::string>("points-corner") : "Top Right",
+                "points-corner"
+            );
+            addCycleRow(
+                rows, kListW, "Points Formula",
+                {"240Hz FP (1/N)", "60Hz FP (4/N)", "120Hz FP (2/N)", "Squared (1/N^2)", "60Hz Align Odds"},
+                mod ? mod->getSettingValue<std::string>("points-formula") : "240Hz FP (1/N)",
+                "points-formula"
+            );
+            addSliderRow(rows, kListW, "Points Decimals", "points-decimals", static_cast<float>(cfg.pointsDecimals), 1.f, 4.f, 1.f, 0, true);
+
             addSectionHeader(rows, kListW, "Live NaNDL Precision (L*)");
             addToggleRow(rows, kListW, "Show Precision L* HUD", "show-precision-hud", cfg.showPrecisionHud);
             addCycleRow(
                 rows, kListW, "NaNDL Model",
-                {"NFC (Full)", "Base", "Nerve", "Fatigue", "CPS", "All Models"},
+                {
+                    "NFC (Full)", "Base", "Nerve", "Fatigue", "CPS",
+                    "Nerve+Fatigue", "Nerve+CPS", "Fatigue+CPS",
+                    "All 8 Models", "Custom Toggles"
+                },
                 mod ? mod->getSettingValue<std::string>("nandl-model") : "NFC (Full)",
-                "nandl-model"
+                "nandl-model",
+                [weakSelf](std::string const&) {
+                    Loader::get()->queueInMainThread([weakSelf]() {
+                        if (auto self = weakSelf.lock(); self && !self->m_closed) {
+                            self->rebuildCurrentTab();
+                        }
+                    });
+                }
             );
+            if (cfg.nandlDisplay == core::NandlDisplayMode::Custom) {
+                addToggleRow(rows, kListW, "Custom: Base L*", "nandl-show-base", cfg.nandlCustom.base);
+                addToggleRow(rows, kListW, "Custom: Nerve L*", "nandl-show-nerve", cfg.nandlCustom.nerve);
+                addToggleRow(rows, kListW, "Custom: Fatigue L*", "nandl-show-fatigue", cfg.nandlCustom.fatigue);
+                addToggleRow(rows, kListW, "Custom: CPS L*", "nandl-show-cps", cfg.nandlCustom.cps);
+                addToggleRow(rows, kListW, "Custom: Nerve+Fatigue L*", "nandl-show-nf", cfg.nandlCustom.nerveFatigue);
+                addToggleRow(rows, kListW, "Custom: Nerve+CPS L*", "nandl-show-nc", cfg.nandlCustom.nerveCps);
+                addToggleRow(rows, kListW, "Custom: Fatigue+CPS L*", "nandl-show-fc", cfg.nandlCustom.fatigueCps);
+                addToggleRow(rows, kListW, "Custom: NFC (Full) L*", "nandl-show-nfc", cfg.nandlCustom.nfc);
+            }
             addToggleRow(rows, kListW, "Show Pass Chance P(C)", "show-pass-prob", cfg.showPassProb);
+            addToggleRow(rows, kListW, "Show Attempt Time E[Ta]", "show-expected-time", cfg.showExpectedTime);
             addNumberInputRow(rows, kListW, "Window FPS", "macro-fps", cfg.nandlParams.macroFps, 60.0, 960.0, 1);
             addNumberInputRow(rows, kListW, "Respawn Time (s)", "respawn-time", cfg.nandlParams.respawnTime, 0.0, 5.0, 2);
             addNumberInputRow(rows, kListW, "Target Clear Time (h)", "target-hours", cfg.nandlParams.targetTime / 3600.0, 0.5, 168.0, 1);
@@ -730,12 +826,19 @@ void ModMenuPopup::rebuildCurrentTab() {
             rMenu->setContentSize({kListW, 34.f});
             resetNandlRow->addChild(rMenu, 1);
             auto* rSpr = ButtonSprite::create("Reset NaNDL Constants", 150, true, "goldFont.fnt", "GJ_button_05.png", 24.f, 0.36f);
-            auto* rBtn = CCMenuItemExt::createSpriteExtra(rSpr, [this](CCMenuItemSpriteExtra*) {
+            auto* rBtn = CCMenuItemExt::createSpriteExtra(rSpr, [weakSelf](CCMenuItemSpriteExtra*) {
+                auto& ctrl = engine::ProbeController::get();
+                ctrl.setSuppressSettingsChanged(true);
                 core::SettingsBridge::resetKeys({
                     "macro-fps", "respawn-time", "target-hours", "nandl-kt", "nandl-ku", "nandl-kc"
                 });
-                engine::ProbeController::get().onSettingsChanged();
-                this->rebuildCurrentTab();
+                ctrl.setSuppressSettingsChanged(false);
+                ctrl.onSettingsChanged();
+                Loader::get()->queueInMainThread([weakSelf]() {
+                    if (auto self = weakSelf.lock(); self && !self->m_closed) {
+                        self->rebuildCurrentTab();
+                    }
+                });
             });
             rBtn->setPosition({kListW * 0.5f, 17.f});
             rMenu->addChild(rBtn);
