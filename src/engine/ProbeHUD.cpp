@@ -495,6 +495,193 @@ void ProbeController::recordNandlAndUpdate(
     updatePrecisionHUD();
 }
 
+void ProbeController::clearPointsHUD() {
+    auto* sentinel = m_pointsSentinel;
+    m_pointsSentinel = nullptr;
+    if (sentinel) {
+        sentinel->disarm();
+    }
+
+    auto* hud = m_pointsHud;
+    m_pointsHud = nullptr;
+    m_pointsValueLabel = nullptr;
+    m_pointsLeftLabel = nullptr;
+    m_pointsRightLabel = nullptr;
+
+    if (hud && hud->getParent()) {
+        hud->removeFromParentAndCleanup(true);
+    }
+}
+
+void ProbeController::buildPointsHUD() {
+    clearPointsHUD();
+    if (!m_level || !m_cfg.enabled || !m_cfg.showPointsHud || m_platformer) return;
+
+    auto* root = CCNode::create();
+    if (!root) return;
+
+    const auto winSize = CCDirector::sharedDirector()->getWinSize();
+    const auto buckets = core::bandsForMax(m_cfg.maxWindowFrames, m_cfg.oneAtBottom);
+    constexpr float kRowSpacing = 14.5f;
+    const std::size_t totalTallyRows = buckets.size() + (m_cfg.showLastBadge ? 1 : 0);
+
+    constexpr float kCardWidth = 132.f;
+    constexpr float kCardHeight = 36.f;
+    const float anchorX = winSize.width - 10.f;
+    float topY = winSize.height - 50.f;
+
+    switch (m_cfg.pointsCorner) {
+        case core::PointsCorner::MiddleRight:
+            topY = winSize.height * 0.50f + kCardHeight * 0.5f;
+            break;
+        case core::PointsCorner::BottomRight:
+            topY = kCardHeight + 10.f;
+            if (m_cfg.showCounters && m_cfg.hudCorner == core::HudCorner::BottomRight) {
+                const float tallyTop = 14.f + kRowSpacing * static_cast<float>(
+                    totalTallyRows > 0 ? totalTallyRows - 1 : 0
+                ) + 10.f;
+                topY = std::max(topY, tallyTop + kCardHeight + 6.f);
+            }
+            break;
+        case core::PointsCorner::TopRight:
+        default:
+            topY = winSize.height - 50.f;
+            if (m_cfg.showCounters && m_cfg.hudCorner == core::HudCorner::TopRight) {
+                const float tallyBottom = (winSize.height - 14.f) - kRowSpacing * static_cast<float>(totalTallyRows);
+                topY = std::min(topY, tallyBottom - 6.f);
+            }
+            break;
+    }
+
+    root->setPosition({anchorX, topY});
+    root->setID("points-hud"_spr);
+    m_pointsSentinel = CleanupSentinel::create(SentinelKind::PointsHud, root);
+    if (m_pointsSentinel) {
+        root->addChild(m_pointsSentinel, -999999);
+    }
+    m_level->addChild(root, 1000002);
+    m_pointsHud = root;
+
+    if (auto* bg = NineSlice::create("square02b_001.png")) {
+        bg->setContentSize({kCardWidth, kCardHeight});
+        bg->setColor({10, 14, 24});
+        bg->setOpacity(135);
+        bg->setPosition({-kCardWidth * 0.5f, -kCardHeight * 0.5f});
+        root->addChild(bg, 0);
+    }
+
+    const int decimals = std::clamp(m_cfg.pointsDecimals, 1, 4);
+    const auto ptsText = fmt::format("Pts: {:.{}f}", m_stats.totalPoints, decimals);
+    if (auto* valLabel = CCLabelBMFont::create(ptsText.c_str(), "bigFont.fnt")) {
+        valLabel->setAnchorPoint({1.f, 0.5f});
+        valLabel->setPosition({-8.f, -12.f});
+        valLabel->setScale(0.42f);
+        valLabel->limitLabelWidth(kCardWidth - 16.f, 0.42f, 0.20f);
+        valLabel->setColor({255, 232, 120});
+        root->addChild(valLabel, 1);
+        m_pointsValueLabel = valLabel;
+    }
+
+    const auto fpText = fmt::format("1F: {}", m_stats.attemptFramePerfects);
+    if (auto* leftLabel = CCLabelBMFont::create(fpText.c_str(), "bigFont.fnt")) {
+        leftLabel->setAnchorPoint({0.f, 0.5f});
+        leftLabel->setPosition({-kCardWidth + 8.f, -27.f});
+        leftLabel->setScale(0.28f);
+        leftLabel->limitLabelWidth(54.f, 0.28f, 0.16f);
+        leftLabel->setColor({205, 220, 240});
+        root->addChild(leftLabel, 1);
+        m_pointsLeftLabel = leftLabel;
+    }
+
+    const auto bestText = fmt::format("Best: {:.{}f}", m_stats.bestPoints, decimals);
+    if (auto* rightLabel = CCLabelBMFont::create(bestText.c_str(), "bigFont.fnt")) {
+        rightLabel->setAnchorPoint({1.f, 0.5f});
+        rightLabel->setPosition({-8.f, -27.f});
+        rightLabel->setScale(0.28f);
+        rightLabel->limitLabelWidth(64.f, 0.28f, 0.16f);
+        rightLabel->setColor({145, 225, 255});
+        root->addChild(rightLabel, 1);
+        m_pointsRightLabel = rightLabel;
+    }
+}
+
+void ProbeController::resetPointsHUD() {
+    updatePointsHUD(0.0, 0);
+}
+
+void ProbeController::updatePointsHUD(double deltaPoints, std::uint64_t windowFrames) {
+    if (!m_level || !m_pointsHud || m_pointsHud->getParent() != m_level) return;
+
+    const int decimals = std::clamp(m_cfg.pointsDecimals, 1, 4);
+    constexpr float kCardWidth = 132.f;
+
+    if (hasChild(m_pointsHud, m_pointsValueLabel)) {
+        const auto ptsText = fmt::format("Pts: {:.{}f}", m_stats.totalPoints, decimals);
+        m_pointsValueLabel->stopAllActions();
+        m_pointsValueLabel->setString(ptsText.c_str());
+        m_pointsValueLabel->limitLabelWidth(kCardWidth - 16.f, 0.42f, 0.20f);
+        const float targetScale = m_pointsValueLabel->getScale();
+        if (deltaPoints > 0.0) {
+            m_pointsValueLabel->setColor({255, 255, 255});
+            m_pointsValueLabel->setScale(targetScale * 1.18f);
+            m_pointsValueLabel->runAction(CCSpawn::createWithTwoActions(
+                CCScaleTo::create(0.18f, targetScale),
+                CCTintTo::create(0.28f, 255, 232, 120)
+            ));
+        } else {
+            m_pointsValueLabel->setColor({255, 232, 120});
+        }
+    } else {
+        m_pointsValueLabel = nullptr;
+    }
+
+    if (hasChild(m_pointsHud, m_pointsLeftLabel)) {
+        const auto fpText = fmt::format("1F: {}", m_stats.attemptFramePerfects);
+        m_pointsLeftLabel->setString(fpText.c_str());
+        m_pointsLeftLabel->limitLabelWidth(54.f, 0.28f, 0.16f);
+    } else {
+        m_pointsLeftLabel = nullptr;
+    }
+
+    if (hasChild(m_pointsHud, m_pointsRightLabel)) {
+        m_pointsRightLabel->stopAllActions();
+        if (deltaPoints > 0.0) {
+            const auto deltaText = fmt::format("+{:.{}f}", deltaPoints, decimals);
+            const auto col = windowFrames > 0
+                ? toCCColor(core::colorForWindow(windowFrames, m_cfg))
+                : ccColor3B{160, 255, 160};
+            m_pointsRightLabel->setString(deltaText.c_str());
+            m_pointsRightLabel->limitLabelWidth(64.f, 0.28f, 0.16f);
+            m_pointsRightLabel->setColor(col);
+        } else {
+            const auto bestText = fmt::format("Best: {:.{}f}", m_stats.bestPoints, decimals);
+            m_pointsRightLabel->setString(bestText.c_str());
+            m_pointsRightLabel->limitLabelWidth(64.f, 0.28f, 0.16f);
+            m_pointsRightLabel->setColor({145, 225, 255});
+        }
+    } else {
+        m_pointsRightLabel = nullptr;
+    }
+}
+
+void ProbeController::recomputePointsAndStats() {
+    m_stats.totalPoints = 0.0;
+    m_stats.attemptMeasured = 0;
+    m_stats.attemptFramePerfects = 0;
+    m_stats.lastAddedPoints = 0.0;
+
+    for (const auto w : m_measuredWindows) {
+        if (w == 0) continue;
+        ++m_stats.attemptMeasured;
+        if (w == 1) ++m_stats.attemptFramePerfects;
+        m_stats.totalPoints += core::pointsForWindow(w, m_cfg);
+    }
+    if (m_stats.totalPoints > m_stats.bestPoints) {
+        m_stats.bestPoints = m_stats.totalPoints;
+    }
+    updatePointsHUD(0.0, 0);
+}
+
 CCPoint ProbeController::ringScreenPos(PlayLayer* layer, CCPoint objectPos) const {
     if (!layer || !layer->m_objectLayer) return objectPos;
     const auto world = layer->m_objectLayer->convertToWorldSpace(objectPos);
@@ -667,8 +854,10 @@ void ProbeController::attachMarker(
     if (!layer || layer != m_level || !layer->m_objectLayer) return;
 
     ++m_stats.totalMeasured;
+    ++m_stats.attemptMeasured;
     if (windowFrames == 1 && !overLimit) {
         ++m_stats.framePerfects;
+        ++m_stats.attemptFramePerfects;
     }
     m_stats.lastWindowFrames = windowFrames;
     m_stats.lastWasRelease = isRelease;
@@ -676,6 +865,13 @@ void ProbeController::attachMarker(
 
     if (!overLimit && windowFrames >= 1) {
         m_measuredWindows.push_back(windowFrames);
+        const double pts = core::pointsForWindow(windowFrames, m_cfg);
+        m_stats.totalPoints += pts;
+        m_stats.lastAddedPoints = pts;
+        if (m_stats.totalPoints > m_stats.bestPoints) {
+            m_stats.bestPoints = m_stats.totalPoints;
+        }
+        updatePointsHUD(pts, windowFrames);
     }
 
     pulseHUD(windowFrames, isRelease, overLimit);

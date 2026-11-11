@@ -8,6 +8,7 @@ enum class SentinelKind {
     Level,
     Hud,
     PrecHud,
+    PointsHud,
     MarkerLayer,
 };
 
@@ -174,6 +175,11 @@ private:
     void buildPrecisionHUD();
     void clearPrecisionHUD();
     void updatePrecisionHUD();
+    void buildPointsHUD();
+    void clearPointsHUD();
+    void resetPointsHUD();
+    void updatePointsHUD(double deltaPoints = 0.0, std::uint64_t windowFrames = 0);
+    void recomputePointsAndStats();
     void recordNandlAndUpdate(std::int64_t actionFrame, std::uint64_t windowFrames, bool isRelease, bool ignored = false);
 
     cocos2d::CCPoint ringScreenPos(PlayLayer* layer, cocos2d::CCPoint objectPos) const;
@@ -272,10 +278,15 @@ private:
     cocos2d::CCNode* m_hud = nullptr;
     cocos2d::CCLabelBMFont* m_lastBadgeLabel = nullptr;
     cocos2d::CCNode* m_precHud = nullptr;
+    cocos2d::CCNode* m_pointsHud = nullptr;
+    cocos2d::CCLabelBMFont* m_pointsValueLabel = nullptr;
+    cocos2d::CCLabelBMFont* m_pointsLeftLabel = nullptr;
+    cocos2d::CCLabelBMFont* m_pointsRightLabel = nullptr;
     cocos2d::CCNode* m_markerLayer = nullptr;
     CleanupSentinel* m_levelSentinel = nullptr;
     CleanupSentinel* m_hudSentinel = nullptr;
     CleanupSentinel* m_precHudSentinel = nullptr;
+    CleanupSentinel* m_pointsSentinel = nullptr;
     CleanupSentinel* m_markerSentinel = nullptr;
     bool m_suppressSettingsChanged = false;
     std::vector<CountRow> m_counters;

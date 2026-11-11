@@ -50,6 +50,7 @@ void ProbeController::onSettingsChanged() {
         if (!m_cfg.enabled || m_platformer) {
             clearHUD();
             clearPrecisionHUD();
+            clearPointsHUD();
             clearMarkers();
         } else {
             if (!m_nandlInputs.empty()) {
@@ -64,8 +65,10 @@ void ProbeController::onSettingsChanged() {
                     m_stats.bestLStar = m_stats.currentLStar;
                 }
             }
+            recomputePointsAndStats();
             buildHUD();
             buildPrecisionHUD();
+            buildPointsHUD();
         }
     }
 }
@@ -86,6 +89,15 @@ void ProbeController::onSentinelDestroyed(SentinelKind kind, void* expected) {
                 m_precHud = nullptr;
             }
             break;
+        case SentinelKind::PointsHud:
+            if (m_pointsHud == expected) {
+                m_pointsSentinel = nullptr;
+                m_pointsHud = nullptr;
+                m_pointsValueLabel = nullptr;
+                m_pointsLeftLabel = nullptr;
+                m_pointsRightLabel = nullptr;
+            }
+            break;
         case SentinelKind::MarkerLayer:
             if (m_markerLayer == expected) {
                 m_markerSentinel = nullptr;
@@ -98,11 +110,16 @@ void ProbeController::onSentinelDestroyed(SentinelKind kind, void* expected) {
                 m_levelSentinel = nullptr;
                 m_hudSentinel = nullptr;
                 m_precHudSentinel = nullptr;
+                m_pointsSentinel = nullptr;
                 m_markerSentinel = nullptr;
 
                 m_hud = nullptr;
                 m_lastBadgeLabel = nullptr;
                 m_precHud = nullptr;
+                m_pointsHud = nullptr;
+                m_pointsValueLabel = nullptr;
+                m_pointsLeftLabel = nullptr;
+                m_pointsRightLabel = nullptr;
                 m_markerLayer = nullptr;
                 m_counters.clear();
                 m_markers.clear();
@@ -152,6 +169,10 @@ void ProbeController::onSentinelDestroyed(SentinelKind kind, void* expected) {
                 m_hasNandlSummary = false;
                 m_stats.currentLStar = 0.0;
                 m_stats.lastWindowFrames = 0;
+                m_stats.attemptFramePerfects = 0;
+                m_stats.attemptMeasured = 0;
+                m_stats.totalPoints = 0.0;
+                m_stats.lastAddedPoints = 0.0;
             }
             break;
     }
@@ -178,6 +199,7 @@ void ProbeController::startLevel(PlayLayer* layer) {
     if (m_cfg.enabled && !m_platformer) {
         buildHUD();
         buildPrecisionHUD();
+        buildPointsHUD();
     }
 }
 
@@ -206,10 +228,15 @@ void ProbeController::resetAttemptState() {
     m_hasNandlSummary = false;
     m_stats.currentLStar = 0.0;
     m_stats.lastWindowFrames = 0;
+    m_stats.attemptFramePerfects = 0;
+    m_stats.attemptMeasured = 0;
+    m_stats.totalPoints = 0.0;
+    m_stats.lastAddedPoints = 0.0;
 
     clearMarkers();
     resetHUD();
     updatePrecisionHUD();
+    resetPointsHUD();
 }
 
 void ProbeController::resetAllState() {
@@ -222,6 +249,7 @@ void ProbeController::resetAllState() {
     clearMarkers();
     clearHUD();
     clearPrecisionHUD();
+    clearPointsHUD();
 
     auto* levelSentinel = m_levelSentinel;
     m_levelSentinel = nullptr;
@@ -404,6 +432,7 @@ void ProbeController::afterTick(PlayLayer* layer, float dt) {
         moveMarkers(layer, dt);
         if (!m_hud && m_cfg.showCounters) buildHUD();
         if (!m_precHud && m_cfg.showPrecisionHud) buildPrecisionHUD();
+        if (!m_pointsHud && m_cfg.showPointsHud) buildPointsHUD();
     }
 
     if (m_levelDone || m_platformer || !m_cfg.enabled) return;

@@ -49,7 +49,11 @@ constexpr std::array<std::string_view, 33> kAllKeys = {{
     "show-last-badge",
 }};
 
-constexpr std::array<std::string_view, 18> kNandlKeys = {{
+constexpr std::array<std::string_view, 22> kNandlKeys = {{
+    "show-points-hud",
+    "points-corner",
+    "points-formula",
+    "points-decimals",
     "show-precision-hud",
     "nandl-model",
     "nandl-show-base",
@@ -114,6 +118,10 @@ ModSettingsSnapshot SettingsBridge::read() {
     s.hudCorner = parseHudCorner(mod->getSettingValue<std::string>("hud-corner"));
     s.oneAtBottom = mod->getSettingValue<std::string>("bucket-order") != "1 at Top";
     s.showLastBadge = mod->getSettingValue<bool>("show-last-badge");
+    s.showPointsHud = mod->getSettingValue<bool>("show-points-hud");
+    s.pointsCorner = parsePointsCorner(mod->getSettingValue<std::string>("points-corner"));
+    s.pointsFormula = parsePointsFormula(mod->getSettingValue<std::string>("points-formula"));
+    s.pointsDecimals = std::clamp(static_cast<int>(mod->getSettingValue<std::int64_t>("points-decimals")), 1, 4);
     s.showPrecisionHud = mod->getSettingValue<bool>("show-precision-hud");
     s.nandlDisplay = parseNandlDisplayMode(mod->getSettingValue<std::string>("nandl-model"));
     s.nandlCustom.base = mod->getSettingValue<bool>("nandl-show-base");

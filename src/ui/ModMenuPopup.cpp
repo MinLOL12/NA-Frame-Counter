@@ -291,9 +291,11 @@ void ModMenuPopup::selectTab(Tab tab) {
 void ModMenuPopup::refreshStatsFooter() {
     if (m_closed || !m_statsLabel) return;
     auto const& st = engine::ProbeController::get().stats();
+    auto const& cfg = engine::ProbeController::get().config();
+    const int dec = std::clamp(cfg.pointsDecimals, 1, 4);
     m_statsLabel->setString(fmt::format(
-        "Att: {}  |  1F: {}  |  Inputs: {}  |  Best L*: {:.2f}",
-        st.attempts, st.framePerfects, st.totalMeasured, st.bestLStar
+        "Att: {}  |  1F: {}  |  Pts: {:.{}f}  |  Best L*: {:.2f}",
+        st.attempts, st.framePerfects, st.totalPoints, dec, st.bestLStar
     ).c_str());
 }
 
@@ -762,6 +764,22 @@ void ModMenuPopup::rebuildCurrentTab() {
                 "bucket-order"
             );
             addToggleRow(rows, kListW, "Show Last Input Badge", "show-last-badge", cfg.showLastBadge);
+
+            addSectionHeader(rows, kListW, "Right-Side Total Points");
+            addToggleRow(rows, kListW, "Show Total Points HUD", "show-points-hud", cfg.showPointsHud);
+            addCycleRow(
+                rows, kListW, "Points Position",
+                {"Top Right", "Middle Right", "Bottom Right"},
+                mod ? mod->getSettingValue<std::string>("points-corner") : "Top Right",
+                "points-corner"
+            );
+            addCycleRow(
+                rows, kListW, "Points Formula",
+                {"240Hz FP (1/N)", "60Hz FP (4/N)", "120Hz FP (2/N)", "Squared (1/N^2)", "60Hz Align Odds"},
+                mod ? mod->getSettingValue<std::string>("points-formula") : "240Hz FP (1/N)",
+                "points-formula"
+            );
+            addSliderRow(rows, kListW, "Points Decimals", "points-decimals", static_cast<float>(cfg.pointsDecimals), 1.f, 4.f, 1.f, 0, true);
 
             addSectionHeader(rows, kListW, "Live NaNDL Precision (L*)");
             addToggleRow(rows, kListW, "Show Precision L* HUD", "show-precision-hud", cfg.showPrecisionHud);

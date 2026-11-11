@@ -222,6 +222,52 @@ void testColorsBucketsAndFormatting() {
     assert(formatMarkerText(13, false, true, 12, true) == ">12");
 }
 
+void testPointsScoring() {
+    assert(parsePointsCorner("Top Right") == PointsCorner::TopRight);
+    assert(parsePointsCorner("Middle Right") == PointsCorner::MiddleRight);
+    assert(parsePointsCorner("Bottom Right") == PointsCorner::BottomRight);
+
+    assert(parsePointsFormula("240Hz FP (1/N)") == PointsFormula::FP240Inverse);
+    assert(parsePointsFormula("60Hz FP (4/N)") == PointsFormula::FP60Equivalent);
+    assert(parsePointsFormula("120Hz FP (2/N)") == PointsFormula::FP120Equivalent);
+    assert(parsePointsFormula("Squared (1/N^2)") == PointsFormula::Squared240);
+    assert(parsePointsFormula("60Hz Align Odds") == PointsFormula::Align60Hz);
+
+    ModSettingsSnapshot cfg;
+    cfg.maxWindowFrames = 12;
+
+    cfg.pointsFormula = PointsFormula::FP240Inverse;
+    expectNear(pointsForWindow(0, cfg), 0.0, 1e-9, "0F gives 0 points");
+    expectNear(pointsForWindow(1, cfg), 1.0, 1e-9, "240Hz 1F = 1.00");
+    expectNear(pointsForWindow(2, cfg), 0.5, 1e-9, "240Hz 2F = 0.50");
+    expectNear(pointsForWindow(3, cfg), 1.0 / 3.0, 1e-9, "240Hz 3F = 0.333...");
+    expectNear(pointsForWindow(4, cfg), 0.25, 1e-9, "240Hz 4F = 0.25");
+    expectNear(pointsForWindow(13, cfg), 0.0, 1e-9, ">maxWindowFrames gives 0 points");
+
+    cfg.pointsFormula = PointsFormula::FP60Equivalent;
+    expectNear(pointsForWindow(1, cfg), 4.0, 1e-9, "60Hz FP 1F = 4.0");
+    expectNear(pointsForWindow(4, cfg), 1.0, 1e-9, "60Hz FP 4F = 1.0");
+    expectNear(pointsForWindow(8, cfg), 0.5, 1e-9, "60Hz FP 8F = 0.5");
+
+    cfg.pointsFormula = PointsFormula::FP120Equivalent;
+    expectNear(pointsForWindow(1, cfg), 2.0, 1e-9, "120Hz FP 1F = 2.0");
+    expectNear(pointsForWindow(2, cfg), 1.0, 1e-9, "120Hz FP 2F = 1.0");
+    expectNear(pointsForWindow(4, cfg), 0.5, 1e-9, "120Hz FP 4F = 0.5");
+
+    cfg.pointsFormula = PointsFormula::Squared240;
+    expectNear(pointsForWindow(1, cfg), 1.0, 1e-9, "Squared 1F = 1.0");
+    expectNear(pointsForWindow(2, cfg), 0.25, 1e-9, "Squared 2F = 0.25");
+    expectNear(pointsForWindow(4, cfg), 0.0625, 1e-9, "Squared 4F = 0.0625");
+
+    cfg.pointsFormula = PointsFormula::Align60Hz;
+    expectNear(pointsForWindow(1, cfg), 1.0, 1e-9, "Align60 1F = 1.00");
+    expectNear(pointsForWindow(4, cfg), 1.0, 1e-9, "Align60 4F = 1.00");
+    expectNear(pointsForWindow(5, cfg), 0.75, 1e-9, "Align60 5F = 0.75");
+    expectNear(pointsForWindow(6, cfg), 0.50, 1e-9, "Align60 6F = 0.50");
+    expectNear(pointsForWindow(7, cfg), 0.25, 1e-9, "Align60 7F = 0.25");
+    expectNear(pointsForWindow(8, cfg), 0.0, 1e-9, "Align60 8F = 0.00");
+}
+
 } // namespace
 
 int main() {
@@ -230,6 +276,7 @@ int main() {
     testFrameZeroAndIgnoredInputs();
     testPitchMapping();
     testColorsBucketsAndFormatting();
+    testPointsScoring();
     std::cout << "All NA Frame Counter core unit tests passed!\n";
     return 0;
 }

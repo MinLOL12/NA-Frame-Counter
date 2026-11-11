@@ -50,6 +50,20 @@ HudCorner parseHudCorner(std::string_view value) {
     return HudCorner::TopLeft;
 }
 
+PointsCorner parsePointsCorner(std::string_view value) {
+    if (value == "Middle Right") return PointsCorner::MiddleRight;
+    if (value == "Bottom Right") return PointsCorner::BottomRight;
+    return PointsCorner::TopRight;
+}
+
+PointsFormula parsePointsFormula(std::string_view value) {
+    if (value == "60Hz FP (4/N)") return PointsFormula::FP60Equivalent;
+    if (value == "120Hz FP (2/N)") return PointsFormula::FP120Equivalent;
+    if (value == "Squared (1/N^2)") return PointsFormula::Squared240;
+    if (value == "60Hz Align Odds") return PointsFormula::Align60Hz;
+    return PointsFormula::FP240Inverse;
+}
+
 NandlDisplayMode parseNandlDisplayMode(std::string_view value) {
     if (value == "Base") return NandlDisplayMode::Base;
     if (value == "Nerve") return NandlDisplayMode::Nerve;
@@ -280,6 +294,29 @@ float pitchForWindow(std::uint64_t frames, ModSettingsSnapshot const& cfg) {
     }
 
     return static_cast<float>(std::clamp(pitch, lo, hi));
+}
+
+double pointsForWindow(std::uint64_t frames, ModSettingsSnapshot const& cfg) {
+    if (frames == 0) return 0.0;
+    if (cfg.maxWindowFrames > 0 && frames > static_cast<std::uint64_t>(cfg.maxWindowFrames)) {
+        return 0.0;
+    }
+    const double n = static_cast<double>(frames);
+    switch (cfg.pointsFormula) {
+        case PointsFormula::FP60Equivalent:
+            return 4.0 / n;
+        case PointsFormula::FP120Equivalent:
+            return 2.0 / n;
+        case PointsFormula::Squared240:
+            return 1.0 / (n * n);
+        case PointsFormula::Align60Hz:
+            if (frames <= 4) return 1.0;
+            if (frames < 8) return (8.0 - n) / 4.0;
+            return 0.0;
+        case PointsFormula::FP240Inverse:
+        default:
+            return 1.0 / n;
+    }
 }
 
 std::string formatMarkerText(

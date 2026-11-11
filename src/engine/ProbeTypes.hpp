@@ -263,11 +263,16 @@ struct SessionStats {
     std::uint64_t attempts = 0;
     std::uint64_t totalMeasured = 0;
     std::uint64_t framePerfects = 0;
+    std::uint64_t attemptFramePerfects = 0;
+    std::uint64_t attemptMeasured = 0;
     std::uint64_t lastWindowFrames = 0;
     bool lastWasRelease = false;
     bool lastOverLimit = false;
     double currentLStar = 0.0;
     double bestLStar = 0.0;
+    double totalPoints = 0.0;
+    double bestPoints = 0.0;
+    double lastAddedPoints = 0.0;
 };
 
 }
